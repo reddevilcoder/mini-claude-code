@@ -1,0 +1,48 @@
+# mini Claude Code 全局配置（首次启动时自动生成到 ~/.mcc/mcc.yml，可按需修改）。
+#
+# 配置按以下顺序层层覆盖（后者覆盖前者）：
+#   1. 内置默认值
+#   2. 本文件：全局配置 ~/.mcc/mcc.yml（所有项目通用）
+#   3. 项目级 <项目>/.mcc/mcc.yml（可选，仅当某个项目需要不同设置时才建）
+
+# mini Claude Code 与具体模型厂商无关，下面只是开箱即用的默认值，可改成任意 OpenAI 兼容服务。
+model: deepseek-flash   # 默认模型（可替换为任意 OpenAI 兼容模型）
+maxSteps: 40                 # 单次任务的最大循环步数（边界保护）
+contextLimit: 200000         # 上下文窗口上限（Token）；M6 起作为分层压缩所有百分比阈值的分母
+
+# M2：Bash 执行相关
+sandbox: true                # 是否把 Bash 命令包进 OS 沙箱（无沙箱环境会自动降级并提示）
+bashTimeoutMs: 120000        # Bash 默认超时（毫秒），上限 600000（10 分钟）
+
+# M4：会话持久化与中断恢复
+stateDir: ~/.mcc             # 会话与记忆的状态根目录（会话落盘在 <stateDir>/projects/<项目>/ 下，
+                             #   M6 的超大工具结果落在 <stateDir>/projects/<项目>/tool-results/）
+
+# M6：分层压缩的触发阈值（压缩默认一律开启，无总开关——它是 M6 的核心能力）
+compact:
+  collapseAt: 0.90           # 上下文折叠触发（窗口占用 / contextLimit）
+  autoCompactAt: 0.95        # 自动压缩触发（需要调用模型）
+  microcompactIdleMinutes: 60  # 会话空闲多久（分钟）后才做微压缩
+  keepRecentToolResults: 5     # 微压缩保留最近几次工具结果
+
+# M6：各工具结果落盘阈值（字符数）。单条工具结果超过阈值，就把完整内容落盘到 tool-results/，
+#      历史与日志里只留“前 2KB 预览 + 文件路径”，模型需要时用 Read 取回完整内容。
+toolResultBudget:
+  Read: -1                   # -1 表示无限大、永不落盘（否则模型拿到路径又去 Read，形成死循环）
+  Bash: 30000
+  Grep: 20000
+  Edit: 100000
+  Write: 100000
+  Glob: 100000
+
+# M7：Skills（渐进式披露的可复用能力）。技能目录固定为「全局 ~/.mcc/skills/」与
+#      「项目级 <项目>/.mcc/skills/」两层，不做成配置项（和记忆、配置的层叠约定一致）。
+skills:
+  enabled: true              # 是否启用 Skills（默认开；关掉则不扫描目录、SkillStage 不注入）
+  listingMaxChars: 8000      # 技能清单在上下文里的字符上限（超出按预算截断；/skills 仍能看全）
+
+# 可选：模型服务地址（OpenAI 兼容接口）。也可用环境变量 OPENAI_BASE_URL 覆盖。
+# baseUrl: https://api.deepseek.com
+
+# API Key 不写在这里，请通过环境变量提供：
+#   export OPENAI_API_KEY=sk-xxxx

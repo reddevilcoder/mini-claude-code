@@ -1,0 +1,71 @@
+// mini Claude Code 构建脚本（M1）。
+// 说明：技术栈为 Java 17 + Spring AI + Gradle。Spring AI 只用于最底层的模型调用，
+// 其余（控制循环、工具分发、上下文组装等）全部自己手写，刻意不使用 Spring Boot 的自动装配，
+// 以便学员看清每一处是怎么串起来的。
+plugins {
+    id 'java'
+    id 'application'
+}
+
+group = 'com.minicc'
+version = '0.1.0'
+
+java {
+    // 用 Java 17 工具链；Gradle 会自动在本机已安装的 JDK 中挑选匹配版本。
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(17)
+    }
+}
+
+repositories {
+    mavenCentral()
+}
+
+ext {
+    // Spring AI 版本（GA 版本，发布在 Maven Central 上）。
+    // 2.0.2 起会把思考模式的 reasoning_content 放进助手消息 metadata，并在下一轮请求里回传。
+    springAiVersion = '2.0.2'
+}
+
+dependencies {
+    // Spring AI 物料清单（BOM）：统一管理 Spring AI 及其传递依赖的版本。
+    implementation platform("org.springframework.ai:spring-ai-bom:${springAiVersion}")
+
+    // Spring AI 的 OpenAI 模块：承担最底层的模型调用与消息序列化。
+    // DeepSeek 等国产模型提供 OpenAI 兼容接口，可通过改 base-url 复用该模块。
+    implementation 'org.springframework.ai:spring-ai-openai'
+
+    // JSON 处理：把工具的参数 Schema 序列化成 JSON，以及解析模型返回的工具调用参数。
+    implementation 'com.fasterxml.jackson.core:jackson-databind'
+
+    // 解析 YAML 配置（全局 ~/.mcc/mcc.yml 与项目级 <项目>/.mcc/mcc.yml）。
+    implementation 'org.yaml:snakeyaml:2.2'
+
+    // 终端行编辑：提供退格、方向键、历史记录、中文（多字节字符）等能力。
+    // 裸用 BufferedReader.readLine() 依赖终端 cooked 模式，对多字节字符的退格支持很差。
+    implementation 'org.jline:jline:3.26.3'
+
+    // 日志实现（Spring AI 使用 SLF4J）。
+    runtimeOnly 'ch.qos.logback:logback-classic:1.5.6'
+
+    // 单元测试：JUnit 5。
+    testImplementation platform('org.junit:junit-bom:5.10.2')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+application {
+    // 程序入口：启动交互式会话（REPL）。
+    mainClass = 'com.minicc.MccApplication'
+    // 生成的启动脚本名为 mcc（见 build/install/mini-claude-code/bin/mcc）。
+    applicationName = 'mcc'
+}
+
+test {
+    useJUnitPlatform()
+}
+
+// 让 `gradle run` 能从终端读取交互输入。
+run {
+    standardInput = System.in
+}

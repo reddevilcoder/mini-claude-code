@@ -1,0 +1,2 @@
+// Gradle 工程设置：声明根项目名称。
+rootProject.name = 'mini-claude-code'

@@ -1,0 +1,21 @@
+.gradle
+**/build/
+!src/**/build/
+
+# 项目级运行配置（模型、步数等本机覆盖）。模板在 src/main/resources/default-mcc.yml，
+# 全局配置放 ~/.mcc/mcc.yml。项目目录下 .mcc/mcc.yml 会覆盖全局设置，不提交。
+# 根目录 mcc.yml 是旧位置，同样忽略，避免误提交。
+.mcc/mcc.yml
+mcc.yml
+
+# Ignore Gradle GUI config
+gradle-app.setting
+
+# Avoid ignoring Gradle wrapper jar file (.jar files are usually ignored)
+!gradle-wrapper.jar
+
+# Cache of project
+.gradletasknamecache
+
+# # Work around https://youtrack.jetbrains.com/issue/IDEA-116898
+# gradle/wrapper/gradle-wrapper.properties
