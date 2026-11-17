@@ -13,6 +13,11 @@ import java.util.stream.Stream;
  * <p>路径组织方式：
  * 按「一个项目一个目录、一次会话一个文件」组织——同一台机器上不同项目的会话互不混淆，
  * 且目录名在各平台都合法。
+ *
+ * <p><b>面试关注：可读目录名不等于唯一标识。</b>清洗会把所有非 ASCII 字母数字都替换为连字符，
+ * 因而 {@code /a_b} 与 {@code /a-b} 等不同项目可能得到相同目录；中文路径也会大量丢失信息。
+ * normalize 不解析符号链接，同一真实项目也可能出现多个目录。若要稳定隔离项目，
+ * 可基于规范化真实路径增加哈希，同时考虑不存在的路径与跨机器迁移需求。
  */
 public final class SessionPaths {
 
@@ -58,7 +63,8 @@ public final class SessionPaths {
      * 在"一个项目一个目录"的组织方式下再拼一层 {@code tool-results/}。
      *
      * <p>简化：更完整的实现会把 tool-results 目录按会话再分一层（{@code projectDir/sessionId/tool-results}）；
-     * mini-cc 直接挂在项目目录下，同项目多次会话共享（文件名是全局唯一的 callId，不会撞）。
+     * mini-cc 直接挂在项目目录下，同项目多次会话共享。文件名依赖模型返回的 callId，
+     * 应用未自行保证跨会话唯一；若提供方重复 ID 或清洗后重名，存在复用旧结果文件的风险。
      */
     public Path toolResultsDir(Path projectRoot) {
         return projectDir(projectRoot).resolve("tool-results");
@@ -69,6 +75,8 @@ public final class SessionPaths {
      *
      * <p>「默认恢复最近一次」：列出项目目录下的
      * {@code .jsonl}，按文件修改时间取最新的一个，取其文件名（去掉 .jsonl 后缀）作为 sessionId。
+     * 这里的“最近”是最近写入，不是创建时间；恢复旧会话并续写后，它也会成为最近会话。
+     * 相同 mtime 的文件没有额外的稳定排序规则，mtime 也不承担严格的业务版本号语义。
      */
     public Optional<String> latestSessionId(Path projectRoot) {
         Path dir = projectDir(projectRoot);

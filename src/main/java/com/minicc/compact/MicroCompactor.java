@@ -15,25 +15,35 @@ import java.util.Set;
  * <b>作用：❌不改内存历史、❌不改 JSONL——纯临时映射</b>，只在当次窗口里把旧的可再取结果换成占位符。
  *
  * <p>它只清理<b>可以再取一遍</b>的工具结果（白名单 {@link #COMPACTABLE_TOOLS}：
- * Read / Bash(shell) / Grep / Glob / WebSearch / WebFetch / Edit / Write——它们的内容随时能重新取回来），
+ * Read / Bash(shell) / Grep / Glob / WebSearch / WebFetch / Edit / Write——这是简化的白名单策略），
  * 保留<b>最近 {@code keepRecentToolResults} 个</b>，更早的替换成占位符 {@link #CLEARED}。
  *
  * <p><b>为什么按"空闲时长"触发、而不是按占用？</b>这是全链里最反直觉的一点：
  * 平时每轮请求靠前的部分稳定、能命中模型侧的前缀缓存；一旦在中间"清掉某些旧结果"就打穿了缓存、
- * 后面全要重算。而会话<b>空闲很久</b>后，前缀缓存本就过期、下次请求注定要重建——这时"先清理再缓存"
- * 几乎不额外付代价。所以微压缩专挑这个"反正要重建缓存"的时刻做，平时绝不轻易动中间历史。
+ * 后面的缓存可能无法复用。而会话<b>空闲很久</b>后，服务端缓存可能已经过期，
+ * 此时清理旧结果通常更容易接受。这里是基于空闲时长的启发式策略，并没有查询服务端的缓存状态，
+ * 不能保证缓存已经失效或一定没有额外重算成本。
  *
  * <p>简化：另有一条 cache-editing 主路径（按条数触发、不打穿缓存，还会插入边界消息）这里不做；
  * mini-cc 只做 time-based 这条（留最近 N 个、直接改窗口内容），也不插入边界消息。
  * <b>是否执行由 {@link CompactionManager} 判定</b>（空闲 ≥ {@code microcompactIdleMinutes}，或 {@code /compact} 强制）；
  * 本类被调用时只做投影，不再自己看空闲条件。
+ *
+ * <p><b>面试关注：清正文与删消息有什么不同？</b>这里只替换 {@code responseData}，保留 id、工具名和
+ * 对应的助手调用，因此工具协议配对仍然成立；与 Snip 成对删除调用和结果不同。
+ * 两遍扫描先选保留 id、再重建消息，避免对输入历史做原地修改。
+ *
+ * <p>“可再取”不是无损保证：文件可能已改，搜索结果可能变化，Bash 可能包含副作用，
+ * Edit/Write 的旧回执更不能靠重新执行写操作安全恢复。因此占位符表示当前窗口舍弃了细节，
+ * 若要查旧事实，应优先读取日志或已有落盘结果，而不是盲目重跑命令。
+ * 此投影不写回历史；下一次未满足空闲条件时，旧正文可能再次出现在窗口中，压缩效果并非持久提交。
  */
 public class MicroCompactor {
 
     /** 清空占位符。 */
     static final String CLEARED = "[Old tool result content cleared]";
 
-    /** 可再取一遍的工具白名单（它们的结果随时能重新取回，清掉也不丢信息）。 */
+    /** 允许清理旧正文的工具白名单；“可再取”是近似策略，并不保证可安全重放或无损恢复。 */
     private static final Set<String> COMPACTABLE_TOOLS = Set.of(
             "Read", "Bash", "Grep", "Glob", "WebSearch", "WebFetch", "Edit", "Write");
 
@@ -56,6 +66,8 @@ public class MicroCompactor {
         int kept = 0;
         for (int i = window.size() - 1; i >= 0 && kept < keepRecent; i--) {
             if (window.get(i) instanceof ToolResponseMessage trm) {
+                // 当前 Session 通常一条消息只有一个结果。若含多个结果，这里按列表正序处理，
+                // 且内层没有 kept < keepRecent 判断，保留数可能在这条消息上超过配置值。
                 for (ToolResponseMessage.ToolResponse resp : trm.getResponses()) {
                     if (isCompactable(resp)) {
                         keepIds.add(resp.id());

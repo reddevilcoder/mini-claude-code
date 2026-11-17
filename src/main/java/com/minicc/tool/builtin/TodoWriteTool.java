@@ -19,7 +19,12 @@ import java.util.Map;
  * <p>它维护的是"工作状态"，不碰文件和环境，
  * 因此无需审批、无需沙箱（{@link #isReadOnly()} 返回 true）。
  *
- * <p>语义：用新清单整体替换旧清单（全量覆盖，而非增量）。并校验"任意时刻恰好一个进行中"。
+ * <p>语义：用新清单整体替换旧清单（全量覆盖，而非增量）。实际校验“至多一个进行中”，允许零项进行中。
+ *
+ * <p><b>面试关注：为什么先完整解析、校验，再一次替换？</b>中途发现某项不合法时保留原清单，
+ * 避免边解析边更新导致部分成功。全量覆盖也无需给每项维护稳定 ID 或实现增量合并，代价是每次调用须发送完整列表。
+ * 此工具虽免文件/命令审批，却会修改共享会话状态，所以不可并行。这里的待办是进度表达，
+ * 不是任务执行引擎：标记 completed 不会实际执行测试，也不证明对应工作已经完成。
  */
 public class TodoWriteTool implements Tool {
 
@@ -99,7 +104,7 @@ public class TodoWriteTool implements Tool {
             parsed.add(new TodoItem(content, activeForm, TodoItem.Status.from(str(m.get("status")))));
         }
 
-        // 校验"恰好一个进行中"：允许全部完成或为空，但不允许多个进行中。
+        // 提示词建议“恰好一个”，实际约束更宽：只拒绝多个进行中，全部 pending 或 completed 同样合法。
         long inProgress = parsed.stream()
                 .filter(i -> i.status() == TodoItem.Status.IN_PROGRESS).count();
         if (inProgress > 1) {

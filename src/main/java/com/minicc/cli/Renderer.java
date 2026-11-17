@@ -14,6 +14,13 @@ import java.util.stream.Collectors;
  *
  * <p>约定：行首 ⏺ 表示一步动作、⎿ 表示该步结果，工具调用写成 工具名(参数)。
  * M1 全是只读工具，直接执行，没有审批卡片。
+ *
+ * <p><b>面试关注：展示截断与上下文压缩有什么区别？</b>
+ * toolResult 只在终端显示前几行，不会修改传入的 ToolResult，也不决定模型看到多少内容。
+ * 发给模型的内容受工具本身限制与 CompactionManager 影响；工具结果入库前由 CompactionManager 决定是否外置，
+ * SessionStore 再将入库消息序列化追加到日志。
+ * 将这几层分开，才能避免“终端看起来很短，但请求已超长”的误判。
+ * 工具批次完成后由 AgentLoop 顺序渲染，本类没有实现多线程输出的统一排序。
  */
 public class Renderer {
 

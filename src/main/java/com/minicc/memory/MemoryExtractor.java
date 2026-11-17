@@ -28,8 +28,8 @@ import java.util.List;
  * 补充提取是一道兜底——专门回看这一轮对话，把漏记的补上。它与主 Agent 的「主动保存」<b>互斥</b>：
  * 本轮主 Agent 已经写过记忆目录，就直接跳过提取（互斥判断在 {@code AgentLoop} 里，用一个布尔实现）。
  *
- * <p>实现方式：理想做法是跑在一个共享主对话前缀缓存的 forked agent（子 Agent）里；mini-cc 的
- * 子 Agent 抽象要到 M7，所以这里用一个<b>受限的一次性提取回合</b>——复用控制循环的「调模型 + 调度工具」，但：
+ * <p>实现方式：可以扩展成共享主对话前缀缓存的 forked agent（子 Agent）；当前没有这个抽象，
+ * 所以这里用一个<b>受限的一次性提取回合</b>——复用控制循环的「调模型 + 调度工具」，但：
  * <ol>
  *   <li><b>输入</b>：本轮的对话消息 + 一条「提取提示词」用户消息（含四类型/什么不该存/两步保存 + 现有 {@code MEMORY.md}）；</li>
  *   <li><b>工具</b>：只给 Read/Grep/Glob 和「仅限记忆目录的 Write/Edit」（靠 {@link ToolContext#memoryWritesOnly()}
@@ -37,6 +37,18 @@ import java.util.List;
  *   <li><b>边界</b>：很小的步数上限（默认 5）；</li>
  *   <li><b>隔离</b>：提取回合的消息<b>不写进主会话历史、不落盘</b>，唯一产出就是记忆目录里新增/更新的文件。</li>
  * </ol>
+ *
+ * <p><b>面试关注：兜底提取的可靠性和成本。</b>
+ * <ul>
+ *   <li>它在主答复之后同步运行，最多限制模型调用步数，不是总耗时或 Token 硬上限；
+ *       工具调用也可能一个响应含多次。此处没有取消信号，所以仍会增加用户等待时间。</li>
+ *   <li>“本轮任意一次成功写过记忆就跳过提取”是粗粒度去重策略，省一次旁路调用，
+ *       不保证这一轮所有应记信息都已保存，也没有跨轮内容去重或冲突合并算法。</li>
+ *   <li>独立消息列表隔离的是对话记录，不是 OS 进程。写目录限制依赖传入的注册表与 HookChain
+ *       真正执行 memoryWritesOnly 规则；布尔字段或提示词本身不会拦截文件写入。</li>
+ *   <li>失败不影响已经给出的主答复，但此前成功写入的文件不会回滚。
+ *       主题文件与 MEMORY.md 索引也不是事务更新，需允许“写了一半”的情况。</li>
+ * </ul>
  */
 public class MemoryExtractor {
 
@@ -82,14 +94,14 @@ public class MemoryExtractor {
             List<Message> input = new ArrayList<>(turnMessages);
             input.add(new UserMessage(prompt));
 
-            // 记忆专用上下文：换一套干净工作区（供提取内部的 Read→Edit 校验），写入只允许落在记忆目录。
+            // 记忆专用上下文：换一套干净工作区（供提取内部的 Read→Edit 校验），由审批钩子限制记忆目录写入。
             ToolContext memCtx = new ToolContext(
                     session.workingDir(),
                     new WorkspaceState(),
                     new TodoList(),
                     config.sandbox(),
                     config.bashTimeoutMs(),
-                    null,                               // 提取很短，无需取消信号
+                    null,                               // 当前未接入取消；步数上限不等于单次调用有总时限
                     new PermissionState(),              // 不复用会话放行；提取靠 memoryWritesOnly 约束
                     autoMemory.dir(),
                     true);                              // memoryWritesOnly：只放行记忆目录内的写

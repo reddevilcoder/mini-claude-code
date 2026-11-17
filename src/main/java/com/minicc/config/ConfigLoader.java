@@ -22,6 +22,21 @@ import java.util.Map;
  * <p>API Key 等凭证不写入任何配置文件，而是从环境变量 OPENAI_API_KEY 读取；
  * base-url 可用 OPENAI_BASE_URL 覆盖。工具与具体模型厂商无关——使用 OpenAI 兼容接口这一事实标准，
  * 默认值只是开箱即用的一个选择，可随时改成任意 OpenAI 兼容服务。
+ *
+ * <p><b>面试关注：多层配置怎样合并？</b>
+ * 用一个 Settings 累加器，依次应用全局和项目文件；后读取的文件只覆盖它提供的字段。
+ * compact / skills 子配置按字段继承，toolResultBudget 按工具名合并，不是整个对象一刀切替换。
+ * 最后环境变量只提供 API Key 与服务地址，并非每个配置项都有对应的环境变量覆盖。
+ *
+ * <p><b>面试追问：容错解析是否等于配置校验？</b>
+ * 当前多数数字在解析失败时沿用旧值，但可解析的负数、错误的阈值顺序并没有统一校验；
+ * Boolean.parseBoolean 对不认识的字符串返回 false，也不一定回退到原值。
+ * 文件应用过程逐字段修改累加器，中途异常不会撤销已经应用的字段，因此不是事务式加载。
+ * 这是便于本地 CLI 使用的取舍；若部署为服务，可增加范围/关联校验，并让错误配置明确失败。
+ *
+ * <p><b>面试关注：为什么暴露可测试内核？</b>
+ * 显式传入全局配置路径能让测试使用临时目录，避免修改真实用户配置；
+ * 环境变量仍由 System.getenv 读取，测试结果仍可能受调用进程的环境影响。
  */
 public final class ConfigLoader {
 
@@ -126,7 +141,7 @@ public final class ConfigLoader {
                 s.skills = asSkills(yaml.get("skills"), s.skills);
             }
         } catch (Exception e) {
-            // 配置文件读取失败不致命，保留已有值并提示。
+            // 配置文件读取失败不致命，保留累加器当前值并提示；前面已成功赋值的字段不会回滚。
             System.err.println("读取配置失败（" + file + "），已忽略：" + e.getMessage());
         }
     }

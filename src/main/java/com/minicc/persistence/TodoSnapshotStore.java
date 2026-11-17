@@ -23,6 +23,14 @@ import static java.nio.file.StandardOpenOption.WRITE;
  *
  * <p>简化：这里不让待办随消息链持久化，而是单独存一个
  * {@code <sessionId>.todos.json}，每次整份覆盖写。
+ *
+ * <p><b>面试关注：日志与快照为何分开？</b>日志适合保留过程，快照适合直接读取当前状态，
+ * 这里借用了事件记录与状态投影的思想，但不是完整的事件溯源系统：恢复并不会从事件重建待办，
+ * 快照丢失时只返回空列表，不会自动回放 TodoWrite 修复。
+ *
+ * <p>当前覆盖写先截断旧文件，没有“临时文件写完再原子重命名”的保护，也不与 SessionStore
+ * 组成事务；中途退出可能留下半份快照，日志成功而快照失败也会造成进度不一致。
+ * synchronized 只保护本实例的写方法，不保护并发读取或其它进程。
  */
 public class TodoSnapshotStore {
 

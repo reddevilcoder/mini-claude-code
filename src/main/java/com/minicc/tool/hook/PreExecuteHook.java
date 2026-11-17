@@ -8,8 +8,12 @@ import org.springframework.ai.chat.messages.AssistantMessage;
  * 执行前钩子：在工具真正执行之前被调用，可以放行或拒绝。
  *
  * <p>这是核心扩展点之一。M1 不挂任何钩子（只读工具直接放行）；
- * M3 挂入审批钩子（{@code permission.ApprovalHook}），M6 挂入 Plan Mode 拦截钩子。
+ * M3 挂入审批钩子（{@code permission.ApprovalHook}），M8 挂入 Plan Mode 拦截钩子。
  * 届时只需新增钩子实现，不改控制循环里"执行工具"这段代码。
+ *
+ * <p><b>面试关注：为什么不让每个工具自己弹审批？</b>把访问控制放在统一执行入口，可使新增工具沿用一致策略，
+ * 同时让工具专注于文件读写等业务行为。该保证成立的前提是所有实际执行都经过钩子；直接调用 Tool.execute
+ * 不会自动触发审批。因此钩子约束的是 harness 分发路径，不能替代受限进程、文件权限等更底层的控制。
  */
 public interface PreExecuteHook {
 

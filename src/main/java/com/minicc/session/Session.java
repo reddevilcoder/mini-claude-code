@@ -29,6 +29,18 @@ import java.util.List;
  *
  * <p>两条路径的区别：正常 {@code append*} 既改内存<b>又落盘</b>；回放用的 {@link #replay}
  * 只改内存<b>不落盘</b>（否则会把已在日志里的消息又 append 一遍）。
+ *
+ * <p><b>面试关注：会话状态的边界与一致性。</b>
+ * <ul>
+ *   <li>history 是模型可见的短期对话；workspace、todos、permissions、planMode 是工具运行状态，
+ *       不会因为把历史交给模型就自动恢复。长期记忆另存为文件，生命周期也不同。</li>
+ *   <li>追加顺序是先改内存、后尽力写日志，不是一个事务。日志失败时当前对话继续可用，
+ *       但重启只能恢复成功落盘的部分；这体现了交互可用性优先的取舍。</li>
+ *   <li>本类按 REPL 单控制线程访问设计，并非线程安全容器。并行只读工具只共享其所需的
+ *       WorkspaceState，不直接追加 history；不能因为日志方法有 synchronized 就并发调用整个 Session。</li>
+ *   <li>恢复只回放消息和待办快照，不重放文件修改、命令等副作用，也不恢复已授予的会话权限。
+ *       “恢复聊天记录”不等于“恢复操作系统到当时状态”。</li>
+ * </ul>
  */
 public class Session {
 
@@ -94,7 +106,10 @@ public class Session {
         return planMode;
     }
 
-    /** 只读地返回消息历史（供 HistoryStage 组装）。 */
+    /**
+     * 返回消息列表的只读快照（供 HistoryStage 组装）。复制的是列表结构，不会深拷贝每条 Message；
+     * 因而是防止调用方增删历史的封装手段，不是并发快照或消息对象深度不可变性的保证。
+     */
     public List<Message> history() {
         return List.copyOf(history);
     }
@@ -119,7 +134,7 @@ public class Session {
 
     /**
      * 把一次工具执行结果作为观察追加到历史，并落盘同一条 {@link ToolResponseMessage}。
-     * 在这里把项目自己的 {@link ToolResult} 转成框架的工具响应；{@code error} 只影响控制循环，
+     * 在这里把项目自己的 {@link ToolResult} 转成框架的工具响应；{@code error} 供上层判断和渲染，
      * 不进消息本身（错误说明已经写在 content 里）。
      */
     public void appendToolResult(AssistantMessage.ToolCall call, ToolResult result) {
@@ -139,7 +154,11 @@ public class Session {
         store.append(message);
     }
 
-    /** 把工具调用 + 结果构造成一条框架 {@link ToolResponseMessage}（M6：入库前先过第①层落盘）。 */
+    /**
+     * 把工具调用 + 结果构造成一条框架 {@link ToolResponseMessage}（M6：入库前先过第①层落盘）。
+     * 配对靠 call.id 而非工具名：同一轮可能多次调用 Read，单靠名字无法判断哪个结果属于哪次调用。
+     * 工具失败或被拒绝也要有响应，模型才能在协议完整的历史上纠正下一步行动。
+     */
     public static ToolResponseMessage toToolResponse(AssistantMessage.ToolCall call, ToolResult result) {
         return ToolResponseMessage.builder()
                 .responses(List.of(
@@ -193,6 +212,9 @@ public class Session {
      *
      * <p>M4：这里只清内存；持久化 sink 的切换由上层负责（{@code /clear} 会在清空后
      * {@link #attachPersistence} 到一个新的 sessionId 与新日志文件，旧日志留在磁盘、仍可 {@code /resume}）。
+     *
+     * <p>当前实现的边界：workspace 是 final 且这里没有清空其已读集合，因此复用同一个 Session 时，
+     * 先前的“已读”标记仍会保留。不能据此声称 /clear 或 /resume 会强制所有文件重新 Read。
      */
     public void clear() {
         history.clear();

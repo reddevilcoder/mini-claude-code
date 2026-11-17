@@ -11,6 +11,10 @@ import java.util.List;
  * <p>清单格式与预算：单条描述上限 250 字符、整份清单约占 1% 上下文窗口（默认 8000 字符）、
  * 每条写成 {@code - name: description - whenToUse}。mini-cc 取「单条上限 + 整份上限」两道截断的
  * 简化版（和 M5 {@code MEMORY.md} 截断同构），并额外在每条末尾附上 {@code SKILL.md} 的绝对路径，供模型直接 Read。
+ *
+ * <p><b>面试关注：预算与召回的取舍。</b>这里按清单顺序保留能放下的前缀，没有按当前问题相关性排序；
+ * 清单截断可能让模型看不到排在后面的适用技能。maxChars 是 String.length 的 UTF-16 码元数，
+ * 既不是 UTF-8 字节数，也不是精确 Token 数；固定行为说明与超限提示另计，不能当作整个请求的硬预算。
  */
 public final class SkillPromptText {
 

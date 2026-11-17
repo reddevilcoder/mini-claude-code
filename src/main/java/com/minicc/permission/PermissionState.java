@@ -11,7 +11,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * 会话级权限状态（M3）：记录本会话内用户主动放行过的范围。只在本会话有效，退出即失效。
  *
  * <p>归属与传递方式与 M2 的 {@code WorkspaceState} 完全一致：一个会话一个实例，由
- * {@code Session} 持有（生命周期 = 会话，{@code /clear} 时随新会话重建），再通过
+ * {@code Session} 持有（{@code /clear} 调用 Session.clear 时替换为新权限对象），再通过
  * {@code ToolContext} 传给 {@code ApprovalHook}。这样审批钩子保持无状态，既不会在
  * {@code /clear} 后读到上一个会话遗留的 acceptEdits，也和既有模式对齐。
  *
@@ -22,6 +22,15 @@ import java.util.concurrent.ConcurrentHashMap;
  * mini-cc 把"文件修改"的会话放行简化为一个布尔开关，把"命令"的会话放行简化为<b>命令第一个词</b>的集合。
  *
  * <p>线程安全：只读工具可并行，审批虽在串行写路径上触发，但状态仍可能被并发读到，用 volatile + 并发集合。
+ *
+ * <p><b>面试关注：volatile 解决什么？</b>acceptEdits 的单次读写需要跨线程可见性，布尔赋值本身无需
+ * 读改写原子操作；命令前缀的增删查交给 ConcurrentHashMap 的并发集合。它们不提供“检查权限并执行工具”
+ * 整体事务，执行顺序仍依赖调度器。状态不落盘，恢复历史也不会仅凭旧的工具调用记录重新授权。
+ *
+ * <p><b>面试追问：前缀放行的粒度有多粗？</b>这里实际上取第一个空格之前的子串，没有解析 shell AST。
+ * 放行 git 后会覆盖不同 git 子命令，也不会独立审批同一 shell 字符串中由连接符、管道或替换表达式引入的操作；
+ * 因而它只适合教学演示，不能当作任意 shell 命令的可靠权限匹配。文件放行同样是整个会话的 Edit/Write 开关，
+ * 并不限制到首次获批的文件路径。
  */
 public class PermissionState {
 
@@ -56,7 +65,7 @@ public class PermissionState {
         return acceptEdits;
     }
 
-    /** 取命令前缀：简化为命令的第一个词（如 "mvn -q test" → "mvn"）。 */
+    /** 取命令前缀：截取第一个普通空格前的文本（如 "mvn -q test" → "mvn"），不解析引号、制表符或 shell 语法。 */
     public String bashPrefix(AssistantMessage.ToolCall call) {
         String cmd = ToolCallHelper.getString(call, "command", "").trim();
         if (cmd.isEmpty()) {

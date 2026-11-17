@@ -8,6 +8,11 @@ import java.util.Map;
 /**
  * {@link AssistantMessage.ToolCall} 的参数是 JSON 字符串。工具、审批和渲染要按字段取值，
  * 集中在这里解析；测试里从已解析的 Map 造一条调用，也走这里，避免各处自己拼 JSON。
+ *
+ * <p><b>面试关注：Schema 能保证参数合法吗？</b>不能。这里做宽松解析和类型转换，各工具仍需检查必填项、
+ * 路径、范围及业务约束。非法 JSON 退化为空参数，通常由工具返回“缺少参数”；这提高容错性，也会丢失原始解析原因。
+ * 每次 get 方法都会重新解析 JSON，多个字段不是一次解析的缓存；当前参数较小，若调用频繁可再引入单次解析的参数对象。
+ * ObjectMapper 在静态初始化后不再修改配置，可复用于并行调用。
  */
 public final class ToolCallHelper {
 

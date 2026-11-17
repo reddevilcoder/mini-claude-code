@@ -41,6 +41,16 @@ import java.util.Map;
  *
  * <p>注意两层循环：Repl 是外层（人与程序的交互），AgentLoop 是内层
  * （在一次用户输入内部驱动"决策—行动—观察"的模型与工具循环）。
+ *
+ * <p><b>面试关注：为什么斜杠命令不交给模型？</b>
+ * /clear、/resume 等是确定的本地操作，通过命令表直接分发，避免额外模型延迟与不确定性。
+ * commands 是命令模式的注册表；增加本地命令只需实现 SlashCommand 并注册，
+ * 这些命令也不是向模型声明的 Function Calling 工具。
+ *
+ * <p><b>面试追问：为什么此处可以用一个可变 Session？</b>
+ * start 在当前任务结束前不会读取下一条自然语言输入，因此多个用户任务不会同时修改历史。
+ * 工具层仍可能并行读取共享状态，不能据此外推所有组件都无需考虑线程安全。
+ * 单任务设计也意味着模型请求和轮末记忆提取的等待会延迟下一次输入。
  */
 public class Repl {
 
@@ -137,6 +147,7 @@ public class Repl {
      * CardPrompter 据此返回"取消"；读完 readLine 再还原到这里装的处理函数。两种情形都落到"取消任务"。
      */
     private void runTask() {
+        // 必须先清掉上一轮取消信号，再安装本轮处理函数；finally 保证异常退出也会归还终端信号处理权。
         cancelToken.reset();
         Terminal.SignalHandler previous = terminal.handle(Terminal.Signal.INT, s -> cancelToken.cancel());
         try {

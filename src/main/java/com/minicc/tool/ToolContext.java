@@ -39,6 +39,10 @@ import java.nio.file.Path;
  * 加一个 {@link PlanModeState}，把计划态下发给 {@code PlanModeHook}（判断「现在能不能写」）与
  * {@code PlanModeStage}（判断「要不要注入计划态提示」）。它和 {@code permissions} 平级、互不耦合。
  *
+ * <p><b>面试关注：record 是否意味着上下文完全不可变？</b>record 固定的是字段引用，workspace、todos、
+ * permissions、planMode 指向的对象仍可变化。多个并行工具拿到同一份上下文，共享状态必须由状态类保证并发安全，
+ * 或由调度器保证串行访问。显式传递这些依赖比静态全局变量更容易隔离会话、构造测试和实现受限的记忆提取回合。
+ *
  * @param workingDir      当前会话针对的项目目录（相对路径以它为基准、检索默认在它之下进行）
  * @param workspace       工作区状态（改前先读校验）
  * @param todos           待办清单（工作状态）

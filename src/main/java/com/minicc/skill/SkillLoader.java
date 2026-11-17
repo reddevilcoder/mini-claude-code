@@ -17,8 +17,9 @@ import java.util.stream.Stream;
  * 技能加载器（M7）：会话开始时扫描「全局 + 项目级」两层技能目录，解析每个
  * {@code skill-name/SKILL.md} 的 frontmatter（{@code ---} 之间的 YAML），返回技能元数据列表。
  *
- * <p><b>只读 frontmatter、不读正文</b>——正文（{@code ---} 之后的 markdown）一个字都不进内存，
- * 等模型判断相关时再用 Read 工具按需取回。这就是「渐进式披露」在实现层面的体现，和 M5 的
+ * <p><b>只保留 frontmatter 元数据、不把正文注入上下文</b>——当前解析时通过 Files.readString
+ * 临时读取整份文件，但返回的 Skill 不保存正文，等模型判断相关时再用 Read 工具按需取回。
+ * 这节省的是常驻元数据与提示词成本，并不意味着加载器从未读取正文。和 M5 的
  * {@code AutoMemory} 只加载 {@code MEMORY.md} 索引、主题文件按需 Read 是镜像的两件事。
  *
  * <p>只取主干：
@@ -28,6 +29,14 @@ import java.util.stream.Stream;
  *   <li>用户级（全局）与项目级多个目录来源。</li>
  * </ul>
  * 去掉 plugin / MCP / 远程 / 条件触发（{@code paths}）/ 动态发现 / 技能 hooks 等。
+ *
+ * <p><b>面试关注：发现、选择、执行三件事如何分工？</b>本类只负责启动时发现和解析元数据，
+ * SkillStage 负责把清单放入提示词，由模型判断是否读取正文；真正执行仍通过普通工具。
+ * “匹配技能必须先加载”属于模型指令约束，没有独立的强制匹配器或读取状态机。
+ *
+ * <p>稳定排序与 LinkedHashMap 去重使清单顺序可重复，有利于提示词前缀保持稳定；
+ * 覆盖已有键只替换值，不会把该键移到列表末尾。当前没有文件监听或自动重新扫描，
+ * 清单也没有可信来源验证，不能把来自项目目录的自然语言指令当成新的系统权限。
  */
 public class SkillLoader {
 
@@ -101,6 +110,7 @@ public class SkillLoader {
      */
     private Optional<Skill> parseSkill(Path skillDir, Path file) {
         try {
+            // 整份文件会临时进入堆内存；只提取元数据，不代表这里采用了按块/流式解析。
             String content = Files.readString(file, StandardCharsets.UTF_8);
             Map<String, Object> fm = parseFrontmatter(content);             // 复用 SnakeYAML
             String name = str(fm.get("name"), skillDir.getFileName().toString());  // 缺省用目录名

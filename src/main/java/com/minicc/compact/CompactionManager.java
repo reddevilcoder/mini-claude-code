@@ -28,6 +28,16 @@ import java.util.List;
  *       （{@link com.minicc.session.Session#replaceHistoryInMemory}），但<b>仍不碰 JSONL</b>
  *       （完整原文留在会话日志与 {@code tool-results/}，{@code /resume} 读回全量）。</li>
  * </ul>
+ *
+ * <p><b>面试关注：为什么不是一超限就让模型总结？</b>落盘保留可取回的原文，Snip 去掉特定低价值往返，
+ * 微压缩减少旧结果正文，代码折叠保留操作元数据；这些步骤通常比再次调用模型更便宜、行为也更确定。
+ * 最后才用模型做语义摘要，在延迟、费用和信息保留之间折中。每层读取上一层结果，
+ * 自动摘要看到的可能已经是占位符或结构化摘要，不能指望它重新恢复前面省略的内容。
+ *
+ * <p>这里的阈值只基于历史的估算值，没有计入完整请求的系统背景、工具定义及输出预算；
+ * 各层也不保证体积严格下降。保留的最近轮次本身过大时，即使摘要成功仍可能超限。
+ * {@code lastRequestAt} 是当前编排器的状态，更新的是尝试组装的时刻，未必是一次成功的模型请求；
+ * 当前由单线程主循环使用，没有为多个会话并发共享提供隔离。
  */
 public class CompactionManager {
 
@@ -66,8 +76,9 @@ public class CompactionManager {
     }
 
     /**
-     * {@code /compact} 手动触发：<b>不看阈值</b>强制把 Snip→微压缩→折叠→自动压缩都跑一遍，
-     * 并打印"刻意可见"的分层过程与前后 Token。
+     * {@code /compact} 手动触发：依次调用 Snip→微压缩→折叠→自动压缩，
+     * 并打印分层过程与前后 Token。微压缩不检查空闲条件，自动摘要不检查自动压缩阈值；
+     * 但折叠器仍会遵守其内部阈值，未达到阈值时可以直接返回原窗口。
      */
     public void compactNow(Session session) {
         List<Message> history = session.history();          // 大结果早在入库时就落过盘了
@@ -84,7 +95,7 @@ public class CompactionManager {
         note("微压缩：清理较早可再取的工具结果", t, TokenEstimator.ofMessages(window));
 
         t = TokenEstimator.ofMessages(window);
-        window = collapser.apply(window);                    // 强制折叠（不看阈值）
+        window = collapser.apply(window);                    // 调用折叠器（其内部仍检查折叠阈值）
         note("上下文折叠：把较早对话折叠成结构化摘要", t, TokenEstimator.ofMessages(window));
 
         t = TokenEstimator.ofMessages(window);
@@ -116,6 +127,7 @@ public class CompactionManager {
         // 第③层是否该跑：距上次请求的空闲时长 ≥ microcompactIdleMinutes。
         long idleMinutes = Duration.between(lastRequestAt, Instant.now()).toMinutes();
         boolean microDue = idleMinutes >= config.microcompactIdleMinutes();
+        // 只记录本次尝试；后续摘要或主模型调用失败时，这个时间也不会回滚。
         this.lastRequestAt = Instant.now();
         // 腾完 Snip，若已回落到折叠阈值以下、且不需微压缩，③④⑤ 都不用做（链式短路）。
         if (TokenEstimator.ofMessages(window) < limit * config.collapseAt() && !microDue) {

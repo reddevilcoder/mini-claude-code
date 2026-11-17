@@ -23,6 +23,21 @@ import java.util.concurrent.Future;
  * 结果始终<b>按原始顺序</b>回填为观察，保证模型看到的上下文顺序稳定。
  *
  * <p>钩子检查（{@link HookChain}）在执行每个工具之前进行（M1 空链、M2 仍为空，审批在 M3 挂上）。
+ *
+ * <p><b>面试关注：为什么只并行“连续的一段”？</b>
+ * 例如 Read(A)、Read(B)、Edit(A)、Read(A)，前两个读取可以并行，Edit 必须等它们结束，
+ * 最后一次 Read 必须等 Edit 完成。写操作在这里形成一道屏障；若把所有只读调用统一提前并行，
+ * 最后一次读取可能读到修改前的内容，改变模型原本给出的执行顺序。
+ *
+ * <p><b>面试关注：执行顺序和回填顺序如何解耦？</b>
+ * 每个任务只写 results 中属于自己的下标，完成先后可以不同，返回顺序仍与 calls 相同。
+ * 正常等待时 Future.get() 提供完成同步和内存可见性，不需要给每次数组写入加同一把锁。
+ * 并发安全依据工具的 isConcurrencySafe 声明，不会自动分析文件依赖；共享上下文本身也必须支持相应访问。
+ *
+ * <p><b>面试追问：生产环境还需要什么？</b>
+ * cachedThreadPool 没有固定线程数上限，守护线程也不等于资源已正确关闭；
+ * 可按需求补充并发限流、队列背压、任务超时与显式生命周期管理。
+ * 当前调度仅约束这个调用批次，不提供跨进程文件锁、事务回滚、失败后的自动重试或“恰好执行一次”保证。
  */
 public class ToolScheduler {
 
@@ -64,6 +79,7 @@ public class ToolScheduler {
                 List<Future<?>> futures = new ArrayList<>();
                 int j = i;
                 while (j < calls.size() && isConcurrencySafe(calls.get(j))) {
+                    // 捕获不可变下标，避免闭包错误地引用持续变化的循环变量；数组槽位就是原始调用的位置。
                     final int idx = j;
                     futures.add(pool.submit(() -> results[idx] = runOne(calls.get(idx), ctx)));
                     j++;
@@ -123,9 +139,12 @@ public class ToolScheduler {
     private static void awaitAll(List<Future<?>> futures) {
         for (Future<?> f : futures) {
             try {
+                // 任务已全部提交，按顺序 get 只决定“怎样等结果”，不会把并行执行退化成逐个执行。
                 f.get();
             } catch (Exception e) {
-                // 单个任务的异常已在 safeExecute 内转成错误结果，这里理论上不会抛；兜底忽略。
+                // execute 的普通异常在 safeExecute 中转成结果；钩子抛异常、任务 Error 或等待被中断仍可能到这里。
+                // 当前只恢复中断标记并继续，未填充的结果最终归为 cancelled；因此不是精确的失败分类。
+                // 尤其等待线程被中断时，并不保证所有任务已结束，不能再把它视为完整的批次屏障。
                 if (e instanceof InterruptedException) {
                     Thread.currentThread().interrupt();
                 }

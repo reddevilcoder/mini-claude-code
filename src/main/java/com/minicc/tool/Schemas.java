@@ -6,6 +6,10 @@ import java.util.Map;
 
 /**
  * 构造工具参数 JSON Schema 的小工具，减少各工具里拼 Map 的样板代码。
+ *
+ * <p><b>面试关注：协议描述与执行校验分层。</b>这里仅生成发送给模型的结构化参数说明，
+ * 并没有在本地运行 JSON Schema 校验器，也未设置严格拒绝额外字段。required/enum 能引导生成，
+ * 真实执行仍必须处理缺失、越界和不符合业务含义的参数，不能把模型遵守 Schema 当作程序正确性的前提。
  */
 public final class Schemas {
 

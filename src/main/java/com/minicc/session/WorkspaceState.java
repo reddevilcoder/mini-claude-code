@@ -16,6 +16,15 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * <p>进阶说明：更完整的实现还会记录内容与 mtime，能检测"读完后文件又被外部改动过"。
  * mini-cc 的 WorkspaceState 只记"读过没读过"，这对教学足够；外部改动检测留作进阶。
+ *
+ * <p><b>面试关注：线程安全与业务正确性是两件事。</b>ConcurrentHashMap 的 key-set 保证并行 Read
+ * 登记、查询时集合本身不被破坏；它不保证“读文件→检查→写文件”这一串文件系统操作原子化。
+ * 当前没有保存读取版本、mtime 或内容哈希，所以已读后被外部修改的文件仍可能通过校验。
+ * 若要防止覆盖他人修改，需要版本比较和更完整的写入并发控制，而不只是换一个并发集合。
+ *
+ * <p>路径的 normalize 只消去 {@code .}/{@code ..} 等语法差异，不解析符号链接，
+ * 不同路径仍可能指向同一文件；这个集合既不是文件身份的完整索引，也不是文件访问权限边界。
+ * 此外 Session.clear() 目前不清空该集合，实际生命周期跟随 Session 对象。
  */
 public class WorkspaceState {
 

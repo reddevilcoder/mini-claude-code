@@ -18,12 +18,21 @@ import java.nio.file.Path;
  * <p>权限三态（allow/deny/ask）：mini-cc 把"是否要问（ask）"内聚在钩子里当场弹卡片消化，循环只看到放行/拒绝。
  *
  * <p>权限由运行时强制，不依赖模型自觉：模型只管提出"我要调用 Edit 改这个文件"，准不准由这里拦下来决定。
+ *
+ * <p><b>面试关注：提示词约束和运行时约束差在哪里？</b>提示词只能影响模型选择，本钩子在真正执行前
+ * 做确定性判断。拒绝原因还会作为工具观察回填，模型才有信息调整方案。审批通过不代表工具必定成功：
+ * 参数校验、文件竞态、命令护栏与沙箱仍可能使执行失败，也不会因为允许一次就自动放行后续调用。
+ *
+ * <p><b>面试追问：记忆提取“仅限写记忆”是否完全隔离？</b>这里先放行只读类工具，再放行记忆目录内的
+ * Edit/Write，最后拒绝其余写操作，且会话放行不能越过该拒绝。路径只用 normalize + startsWith 做词法归属判断，
+ * 没有解析符号链接；因此这是简化策略，不能宣称已防止软链接指向目录之外的写入。只读类工具的范围同样来自
+ * 工具实现者的标记，注册新工具时必须审查该声明。
  */
 public class ApprovalHook implements PreExecuteHook {
 
     // 只依赖 Approver（弹卡片、等用户选，CLI 实现）这个"真·单例"。
     // 会话级放行状态 PermissionState 不作为字段注入——它随会话走，由 ToolContext 带进来，
-    // 和 M2 的 WorkspaceState 一个套路。这样钩子保持无状态，/clear 换会话也不会读到脏状态。
+    // 和 M2 的 WorkspaceState 一样随上下文传递；/clear 会替换权限对象，钩子无须自行清理会话授权。
     private final Approver approver;
 
     public ApprovalHook(Approver approver) {
@@ -34,7 +43,7 @@ public class ApprovalHook implements PreExecuteHook {
     public Decision beforeExecute(AssistantMessage.ToolCall call, Tool tool, ToolContext ctx) {
         PermissionState permissions = ctx.permissions(); // 从上下文取本会话的放行状态
 
-        // 1) 只读工具（Read/Grep/Glob/TodoWrite/AskUserQuestion）无副作用，直接放行。
+        // 1) 只读类工具不走文件/命令审批；TodoWrite 等仍可更新内部状态，不能理解为绝无副作用。
         if (tool.isReadOnly()) {
             return Decision.allow();
         }
@@ -59,7 +68,7 @@ public class ApprovalHook implements PreExecuteHook {
             return Decision.allow();
         }
 
-        // 3) 以上都不命中 → 弹审批卡片，暂停等用户选。
+        // 5) 以上都不命中 → 弹审批卡片，暂停等用户选。
         Approval choice = approver.requestApproval(call, tool, ctx);
         switch (choice.kind()) {
             case ALLOW_ONCE:
@@ -99,6 +108,8 @@ public class ApprovalHook implements PreExecuteHook {
             return false;   // 相对路径无法可靠判断归属，交给工具自己报错
         }
         Path normalizedTarget = target.normalize();
+        // normalize 只消解 . 和 ..；startsWith 按路径段比较，避免 memory-other 的字符串前缀误判，
+        // 但二者都不跟随符号链接，也不锁定校验后到写入前的文件系统状态（TOCTOU）。
         Path normalizedMemory = memoryDir.toAbsolutePath().normalize();
         return normalizedTarget.startsWith(normalizedMemory);
     }

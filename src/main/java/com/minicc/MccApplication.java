@@ -65,6 +65,26 @@ import java.util.UUID;
  *
  * <p>这里刻意不使用 Spring Boot 的自动装配，而是一行行把依赖 new 出来并串起来，
  * 让学员清楚地看到 harness 的每一部分是怎么组合的，以及 Spring AI 到底承担了哪一小块。
+ *
+ * <p><b>面试讲解入口：按这条依赖链介绍项目。</b>
+ * <ol>
+ *   <li>{@link Repl} 接收用户输入，{@link Session} 保存当前会话状态。</li>
+ *   <li>{@link ContextAssembler} 组装提示词、记忆、技能与压缩后的历史。</li>
+ *   <li>{@link ModelClient} 完成一次模型调用，{@link AgentLoop} 决定继续执行工具还是结束本轮。</li>
+ *   <li>ToolScheduler 按工具能力调度，每个工具执行前通过 {@link HookChain}；结果进入历史，形成下一步的观察。</li>
+ *   <li>{@link SessionStore} 保存消息日志，{@link CompactionManager} 控制上下文体积，
+ *       {@link MemoryExtractor} 在适当时机把可复用信息保存到长期记忆。</li>
+ * </ol>
+ *
+ * <p><b>面试关注：不用 Spring Boot，是否就没有依赖注入？</b>
+ * 这里是手动的构造器注入：入口负责创建和连接对象，业务组件通过参数接收依赖。
+ * 这是对象装配的集中位置，不应把每个组件的业务判断也搬到入口；测试仍可替换模型、审批器等依赖。
+ *
+ * <p><b>面试追问：提示词、审批和沙箱分别解决什么？</b>
+ * 提示词引导模型行为，Hook 在本地执行前落实规则，OS 沙箱限制子进程实际可用资源。
+ * 三者在不同层面生效，具体保证受工具实现与平台支持约束，不能把一句提示词当作权限隔离。
+ * 当前按单终端、单活跃任务装配；若扩展多用户服务，需要明确每个 Session 的状态隔离、
+ * 共享组件的线程安全和线程池/终端等资源的生命周期。
  */
 public class MccApplication {
 
@@ -154,8 +174,8 @@ public class MccApplication {
                 config, renderer);
 
         // 8.5) M7 Skills 装配：扫描「全局 ~/.mcc/skills」与「项目级 <项目>/.mcc/skills」两层，解析每个
-        //      skill-name/SKILL.md 的 frontmatter，得到技能清单（项目级覆盖全局同名）。只读 frontmatter、
-        //      不读正文——正文由模型按需 Read（渐进式披露）。skills.enabled=false 时完全不扫描、清单为空。
+        //      skill-name/SKILL.md 的 frontmatter，得到技能清单（项目级覆盖全局同名）。加载器会读取文件，
+        //      但清单仅保留元信息；正文由模型按需 Read 才进入上下文（渐进式披露）。关闭时完全不扫描。
         MccConfig.SkillSettings skillSettings = config.skills();
         List<Skill> skills;
         if (skillSettings.enabled()) {
@@ -168,7 +188,7 @@ public class MccApplication {
             skills = List.of();
         }
 
-        // 9) 组装上下文管线：系统提示词 → 记忆（M5）→ Skills 清单（M7）→ 压缩后的会话历史
+        // 9) 组装上下文管线：系统提示词 → 记忆（M5）→ Skills 清单（M7）→ 计划态提示（M8）→ 压缩后的会话历史
         //    （M6 用 CompactionStage 替换 HistoryStage）。SkillStage 和 MemoryStage 同类——稳定的靠前背景知识。
         MemoryStage memoryStage = new MemoryStage(agentMemory, autoMemory); // M5：AGENT.md + 记忆说明 + MEMORY.md 索引
         SkillStage skillStage = new SkillStage(skills, skillSettings.listingMaxChars()); // M7：行为说明 + 技能清单

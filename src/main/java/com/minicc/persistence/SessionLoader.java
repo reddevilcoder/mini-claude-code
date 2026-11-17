@@ -18,6 +18,11 @@ import java.util.stream.Collectors;
  * 助手消息上的工具调用本来就是 {@link AssistantMessage.ToolCall}，原样保留。
  *
  * <p>核心的「点智商」处是中断检测（{@link #dropDanglingToolCalls}）——处理上次会话中途被打断的残局。
+ *
+ * <p><b>面试关注：恢复的目标是什么？</b>这里恢复模型可继续使用的对话与待办，
+ * 不会重新执行历史里的工具。删除悬空调用只是修整消息协议，不代表撤销了已经发生的文件写入或命令。
+ * 会话权限和计划态通过 clear 复位，避免把历史消息误当成当前有效的权限授予。
+ * 待办从独立快照读取，和日志没有事务关联，因此极端中断时二者可能对应不同的更新进度。
  */
 public class SessionLoader {
 
@@ -69,6 +74,11 @@ public class SessionLoader {
      *
      * <p>简化：更完整的恢复还会处理更多边角（孤立 thinking、空白助手、半轮补 continue 等）；
      * mini-cc 只做最关键的这一项——「恢复到最新状态」，不追求把被中断的那一轮无缝续上。
+     *
+     * <p><b>面试追问：是否完整验证了工具消息协议？</b>没有。该算法先扫描全部结果 ID，再扫描助手调用，
+     * 时间约为 O(消息数 + 调用/结果数)，使用一个结果 ID 集合换取快速成员查询。
+     * 它依赖调用 ID 不重复、日志顺序来自正常追加；不会校验结果是否紧跟所属助手轮次，
+     * 也不会删除缺少原调用的孤立工具结果。若日志任意损坏或外部导入，需要更严格的逐轮校验。
      */
     private List<Message> dropDanglingToolCalls(List<Message> messages) {
         // 1) 先收集所有已出现结果的 toolCallId

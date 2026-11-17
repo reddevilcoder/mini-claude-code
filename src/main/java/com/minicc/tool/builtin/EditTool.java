@@ -28,6 +28,15 @@ import java.util.Map;
  *
  * <p>M2 简化：一次只做一处替换（不支持多条编辑批处理），只做精确匹配
  * （不做卷曲引号归一化、de-sanitize 等容错）。
+ *
+ * <p><b>面试关注：为什么用精确字符串替换？</b>模型只需提交局部原文和新文，参数通常比整文件重写短；
+ * old_string 必须唯一，让工具拒绝有歧义的定位。采用字面量而非正则，避免代码中的括号、反斜杠、美元符号
+ * 意外被当成表达式或替换引用。replace_all 统计和替换均按不重叠匹配处理，不代表语法级重命名。
+ *
+ * <p><b>面试追问：改前先读能防并发覆盖吗？</b>当前只检查曾读标记，没有 mtime/版本比对。
+ * 从 hasRead、readString 到 writeString 之间存在检查与使用的竞态（TOCTOU）；唯一匹配只能降低误改概率，
+ * 不能阻止外部进程恰好在写入前改文件。写入也没有临时文件原子替换或回滚机制。工具串行只约束本调度器，
+ * 不会锁住编辑器或其他 Agent；要增强保证需补充版本校验、写入协调及适合目标文件系统的提交方式。
  */
 public class EditTool implements Tool {
 
@@ -116,6 +125,7 @@ public class EditTool implements Tool {
                     ? replaceLiteralAll(content, oldString, newString)
                     : replaceLiteralFirst(content, oldString, newString);
 
+            // 整文件写回，不是文件系统层面的局部 patch；此处失败或进程崩溃时不能承诺原内容完整保留。
             Files.writeString(path, updated, StandardCharsets.UTF_8);
 
             int removed = lineCount(oldString) * (replaceAll ? occurrences : 1);
@@ -128,7 +138,7 @@ public class EditTool implements Tool {
         }
     }
 
-    /** 统计子串出现次数（字面量，不重叠）。 */
+    /** 统计子串出现次数（字面量，不重叠）。调用方已拒绝空串，保证每次 idx 都能前进，避免死循环。 */
     private static int countOccurrences(String content, String sub) {
         int count = 0;
         int idx = 0;

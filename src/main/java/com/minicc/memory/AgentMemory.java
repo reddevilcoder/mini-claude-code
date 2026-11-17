@@ -10,7 +10,7 @@ import java.util.Optional;
  * 读取人写的项目约定 {@code AGENT.md}。
  *
  * <p>这是「两路长期记忆」里由<b>人</b>维护、<b>随仓库提交</b>的那一路：构建命令、代码风格、接口约定
- * 等写在项目级 {@code <项目>/.mcc/AGENT.md} 里，会话开始时整份读进上下文。它和项目级配置
+ * 等写在项目级 {@code <项目>/.mcc/AGENT.md} 里，每次 MemoryStage 组装时整份读进上下文。它和项目级配置
  * {@code <项目>/.mcc/mcc.yml}、项目级 skills {@code <项目>/.mcc/skills} 一起挂在项目的 {@code .mcc/}
  * 目录下（随仓库走）。另一路（模型自己写的 auto memory）由 {@link AutoMemory} 负责——别把两者搞混。
  *
@@ -19,6 +19,12 @@ import java.util.Optional;
  *
  * <p>本类只负责「读成文本」，不解析、不校验——{@code AGENT.md} 是给模型看的自然语言约定。
  * 这里只取「项目根一个文件（+ 可选全局）」这条主线，省掉 managed/user/rules/add-dir 等层级。
+ *
+ * <p><b>面试关注：项目约定与程序配置有何区别？</b>这些文本影响模型判断，不会直接成为
+ * Java 层的权限规则或类型校验；安全约束仍需由 Hook/工具执行器实施。
+ * 全局在前、项目在后只是提示词的拼接顺序，不是代码层面解析冲突并保证覆盖。
+ * 当前每轮重新读取，文件更新可在后续请求生效，代价是重复文件 I/O 和提示词 Token；
+ * 这里也没有像 MEMORY.md 那样的大小预算，过长约定会占用上下文。
  */
 public class AgentMemory {
 

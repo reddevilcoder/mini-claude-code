@@ -9,9 +9,13 @@ package com.minicc.plan;
  * 「会话级放行」，{@code PlanModeState} 专管「现在是不是计划态」。
  *
  * <p>它的归属与传递方式和既有会话级状态完全一致：一个会话一个实例，由 {@code Session} 持有
- * （{@code /clear} 随新会话重建），经 {@code ToolContext} 下发给 {@code PlanModeHook} 与
+ * （{@code /clear} 调用 Session.clear 时替换为新开关），经 {@code ToolContext} 下发给 {@code PlanModeHook} 与
  * {@code PlanModeStage} 查询。进入计划态有两条路（用户 {@code /plan}、模型 {@code EnterPlanMode}），
  * 退出只有一条（模型 {@code ExitPlanMode}），它们最终都落到这个开关上。
+ *
+ * <p><b>面试关注：这是一个最小状态机。</b>状态只有普通执行与计划态两种，进入/退出重复赋同一布尔值
+ * 是幂等的；是否应该弹确认框、重复进入是否报错属于上层工具的交互规则。volatile 保证可见性，
+ * 不使“读取状态—等待用户选择—切换状态”成为原子事务，当前依赖交互工具串行执行来简化并发控制。
  */
 public class PlanModeState {
 

@@ -21,9 +21,15 @@ import java.util.List;
  * 编号不合法会再问一次。卡片等待输入时按 Ctrl-C（或 Ctrl-D）会中断这一行，{@link #readLine} 返回 null，
  * 调用方据此当成"取消整个任务"。
  *
- * <p>全程用 JLine 的 {@code LineReader} 按行读取，终端一直是普通的行编辑模式——不需要 raw 模式、
- * 不需要解析方向键转义序列、也不需要和别的监听线程抢输入。执行期间（等模型、跑命令）的取消由
+ * <p>全程用 JLine 的 {@code LineReader} 按行读取，本类无需自行管理 raw 模式、
+ * 解析方向键转义序列，也不需要和别的监听线程抢输入。底层终端模式由 JLine 管理。执行期间的取消由
  * {@code Repl} 装的 Ctrl-C 信号处理函数负责，与本类无关。
+ *
+ * <p><b>面试关注：人机交互为什么拆成单独组件？</b>
+ * 卡片只处理“展示、读取、解析”，批准的权限范围由审批器决定，问题答案的含义由提问器处理。
+ * parseSingle / parseMulti 是不依赖终端的解析函数，可以直接测试越界、超大数字、去重等边界。
+ * select 的 -1、multiSelect/readLine 的 null 是取消信号，调用方必须与非法输入区分，
+ * 不能把用户中断误当成默认批准。
  */
 public class CardPrompter {
 

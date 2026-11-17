@@ -22,14 +22,25 @@ import java.util.List;
  * <p>窗口在折叠之后仍 ≥ 95%（{@code autoCompactAt}）时触发：把整段历史交给模型做一次摘要
  * （提示词见 {@link CompactionPromptText}，固定九段、只许输出文字），然后用
  * <b>"一条摘要消息 + 最近几条原文"</b>通过 {@link Session#replaceHistoryInMemory} <b>整体替换掉内存历史</b>。
- * 全部用户消息既在摘要的第 6 段被模型逐条复述、最近几轮的用户原话也原样保留——"用户到底要什么"绝不因摘要而丢
- * 替换后内存变瘦，下一轮自然不会再越阈值、也就不会重复摘要，无需再单独缓存摘要。
+ * 摘要提示的第 6 段要求逐条复述用户消息，最近几轮的用户原话还会原样保留，以降低意图丢失风险。
+ * 但这是有损摘要，模型可能遗漏或改写，不能保证所有意图不丢失；若最近轮次或摘要本身仍很大，
+ * 下一轮还可能再次达到阈值，本实现没有压后预算验证或独立的摘要缓存。
  *
  * <p>含<b>紧急压缩兜底</b>：若摘要请求自身都因历史过长而 {@code prompt_too_long}，就先丢最早一批消息再重试。
  *
  * <p>两处实现取舍：①把待摘要历史<b>渲染成纯文本</b>再发（而不是直接发带 tool_calls 的原始消息），
  * 避免"请求里有工具调用、却没带工具定义"在 OpenAI 兼容服务上触发协议校验；②摘要请求本身
  * <b>不写进会话历史、不落盘</b>（只有摘要产物会被写回内存历史、仍不落 JSONL），和 M5 的提取同款"旁路"思路。
+ *
+ * <p><b>面试关注：模型摘要的正确性边界。</b>摘要输入是前面几层的输出，不一定仍含全部原始正文；
+ * 转成文本又丢掉了消息的结构与来源隔离。这里依赖摘要提示、未提供工具定义来限制行为，
+ * 不会校验九段结构、事实完整性或空摘要，历史中的文本也可能干扰摘要模型。
+ * 因此它提供的是降低请求规模的兜底策略，不是可逆压缩或事实准确性的证明。
+ *
+ * <p>先拿到摘要，再替换内存历史；摘要调用异常时不会执行替换，原会话仍在。
+ * 只有识别为“上下文过长”的异常才会删去摘要请求前部并重试，其他异常直接向调用方抛出。
+ * 紧急重试按消息条数而非 Token 丢弃，老事实可能不再进入摘要；原始日志可供另行查证，
+ * 但模型之后并不会自动拥有这些已省略事实。
  */
 public class AutoCompactor {
 
@@ -77,6 +88,7 @@ public class AutoCompactor {
         // 3) 用"一条摘要用户消息 + 最近几条原文"组成新窗口。
         List<Message> compacted = new ArrayList<>();
         compacted.add(new UserMessage("[以下为此前对话的压缩摘要，完整原文在会话日志（JSONL）与 tool-results/ 中]\n" + summary));
+        // 最近原文也参与过摘要，此处是有意重复：优先保真近期指令与工具细节，代价是部分预算重叠。
         compacted.addAll(recentOriginals(window));
 
         // 4) session 非 null 时就地改写内存历史：连同最近几条原文替换掉 messages（就地改写内存里的 REPL 数组）；
@@ -101,6 +113,8 @@ public class AutoCompactor {
         if (userIdx.isEmpty()) {
             return List.of();
         }
+        // 选择用户边界，避免按固定消息条数截断到一批工具往返中间。
+        // 这要求输入历史原本合法；摘要和其他合成 UserMessage 也会被当作轮次边界。
         int pick = Math.max(0, userIdx.size() - KEEP_RECENT_TURNS);
         int keepFrom = userIdx.get(pick);
         return new ArrayList<>(window.subList(keepFrom, window.size()));
@@ -147,6 +161,8 @@ public class AutoCompactor {
      */
     private String callWithEmergencyFallback(List<Message> summaryReq) {
         List<Message> req = summaryReq;
+        // 上限限制的是模型请求次数；即便最后一次失败后还能继续裁剪，也不会无限重试。
+        // 因为输入已经转成纯文本 UserMessage，按条丢弃不会制造悬空 tool_call 协议消息。
         for (int attempt = 0; attempt < MAX_EMERGENCY_DROPS; attempt++) {
             try {
                 AssistantMessage result = modelClient.call(req, List.of());   // 不带工具
@@ -186,6 +202,7 @@ public class AutoCompactor {
         for (Throwable t = e; t != null; t = t.getCause()) {
             String msg = t.getMessage();
             if (msg != null) {
+                // 兼容不同服务的异常包装而遍历 cause；字符串匹配是近似判断，可能把其他 too long 误判为超限。
                 String lower = msg.toLowerCase();
                 if (lower.contains("prompt_too_long")
                         || lower.contains("prompt is too long")

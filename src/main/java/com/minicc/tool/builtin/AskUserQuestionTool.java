@@ -27,6 +27,11 @@ import java.util.Map;
  *
  * <p>已简化：纯文字选项 + 可选多选 + 自动补"其他"，
  * 不做 preview 并排预览、每题 notes、多问题并排提交等富交互。
+ *
+ * <p><b>面试关注：Human-in-the-loop 怎么融入 Agent？</b>把等待用户答复也建模为工具执行，
+ * 回复作为普通工具观察进入下一次模型请求，主循环无需增加“正在澄清”的专属分支。
+ * QuestionAsker 抽离终端交互，测试可直接注入固定回答。该工具只收集信息，不自动授予写文件或执行命令的权限。
+ * 描述中的选项数量、文案长度等建议没有全部变成硬校验，实际保证应以 parseQuestions 的检查为准。
  */
 public class AskUserQuestionTool implements Tool {
 

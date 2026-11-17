@@ -10,6 +10,16 @@ import java.util.Map;
  * {@link #toolResultBudget}（各工具结果落盘的字符阈值）。{@code contextLimit} 从 M1 起
  * "仅作记录"，到 M6 终于被真正用上——它是所有压缩百分比阈值的分母。
  *
+ * <p><b>面试关注：record 是否就是完全不可变对象？</b>
+ * record 自动提供 final 字段、访问器、equals/hashCode 等，适合表达一份配置值；
+ * 但它只提供浅层不可变性。toolResultBudget 如果传入可变 Map，外部仍可修改其内容，
+ * 本类没有通过 Map.copyOf 做防御性复制，也没有在构造器里校验所有字段。
+ *
+ * <p><b>面试追问：为什么同时有 Token 和字符预算？</b>
+ * contextLimit 是估算上下文占用的分母；toolResultBudget 与 listingMaxChars 按字符控制内容体积，
+ * 两种单位不能直接相加。压缩阈值也不等于完整请求的硬限制，系统提示词、工具定义、
+ * 模型输出预留等仍需纳入真正的请求预算。maxSteps 和 bashTimeoutMs 则分别限制循环步数与命令时间。
+ *
  * @param model            默认模型名
  * @param maxSteps         单次任务的最大循环步数（边界保护）
  * @param contextLimit     上下文窗口上限（Token）；M6 起作为压缩阈值的分母

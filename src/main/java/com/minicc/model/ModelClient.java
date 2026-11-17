@@ -26,6 +26,21 @@ import java.util.List;
  * {@link AssistantMessage} 上，由我们自己的控制循环来分发和回填。思考模式的思维链放在这条消息的
  * metadata（键 {@code reasoningContent}）里；下一轮请求时 Spring AI 会把它作为 {@code reasoning_content}
  * 回传。调用方只要原样保存这条助手消息即可。
+ *
+ * <p><b>面试关注：为什么把模型调用单独封装？</b>
+ * 这是适配器边界：上层只依赖“消息 + 工具定义 → 助手消息”，
+ * 不把审批、文件操作、持久化耦合到模型 SDK。测试可注入假的 ChatModel，
+ * 用确定的返回序列验证 Agent 循环，而不需要真实 API Key、网络和随机模型输出。
+ *
+ * <p><b>面试关注：Function Calling 是否会直接执行函数？</b>
+ * 这里传入的 ToolCallback 仅描述能力，模型返回的是工具名、调用 ID 和 JSON 参数；
+ * 真正执行由 AgentLoop / ToolScheduler 控制。原样保留 AssistantMessage 也保留了工具调用与 metadata，
+ * 避免只保存 getText() 后丢失后续协议需要的信息。
+ *
+ * <p><b>面试追问：重试、流式和取消在哪里？</b>
+ * 本类只使用同步 call，没有在 harness 这一层实现流式消费、重试、超时或请求取消，
+ * 底层 SDK 的默认行为也不应当作这里显式实现的能力。异常向上交给控制循环处理；
+ * 若增加重试，应区分仅重发模型请求与重新执行有副作用的工具，避免重复写入。
  */
 public class ModelClient {
 
@@ -68,6 +83,7 @@ public class ModelClient {
                 .build();
 
         ChatResponse resp = chatModel.call(new Prompt(messages, options));
+        // 这里取首个生成结果，约定模型响应至少包含一个结果；没有在适配器内拼接多候选或执行工具。
         return resp.getResult().getOutput();
     }
 }

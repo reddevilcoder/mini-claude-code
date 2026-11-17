@@ -8,8 +8,8 @@ import java.util.List;
 /**
  * 阶段二：放入会话历史——按时间顺序追加用户消息、助手消息和工具结果观察。
  *
- * <p>M4 的压缩会在这个阶段之前（或之内）对历史做裁剪，但那是后续里程碑的事；
- * M1 直接把完整历史放进去。
+ * <p>这是早期版本和不需要压缩场景下的实现：直接把完整历史放进去。
+ * 当前应用入口用 {@link CompactionStage} 替代它；二者应按需择一注册，不能一起追加同一份历史。
  */
 public class HistoryStage implements AssemblyStage {
 

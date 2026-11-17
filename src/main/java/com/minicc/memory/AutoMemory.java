@@ -17,6 +17,14 @@ import java.util.Optional;
  * <p>一个关键概念：{@code MEMORY.md} 是<b>索引</b>而非正文——它始终整份加载进上下文（所以短），
  * 真正的内容拆在 {@code feedback_xx.md} / {@code project_xx.md} 等主题文件里，模型看着索引按需 Read，
  * 这就是「渐进式披露」。
+ *
+ * <p><b>面试关注：这是怎样的长期记忆？</b>它是“文件索引 + 模型按需读主题文件”，
+ * 没有 embedding、向量库、相似度检索或自动召回排序。信息能否被利用，取决于索引质量和模型选择，
+ * 不能把文件存在等同于每轮必然成功召回。相比整份历史注入，它节省上下文，但会增加按需读文件的轮次。
+ *
+ * <p>索引控制的是“带入提示词的成本”，不是磁盘文件写入大小。行数和 UTF-8 字节上限也不是
+ * 精确 Token 上限；追加的告警文本另计。目录允许写入不代表记忆内容永远正确，
+ * 过时、重复或冲突的信息仍需在保存策略与提示词层面治理。
  */
 public class AutoMemory {
 
@@ -49,8 +57,11 @@ public class AutoMemory {
     }
 
     /**
-     * 逐行读入 {@code MEMORY.md}，行数或 UTF-8 字节数任一超限就停，不再把整份索引读进内存。
+     * 逐行读入 {@code MEMORY.md}，行数或 UTF-8 字节数任一超限就停，避免通常情况下整份加载。
      * 停在完整行上；超限时在末尾附一句告警。文件不存在或去掉空白后为空时返回 {@link Optional#empty()}。
+     *
+     * <p>边界：readLine 会先构造完整一行，再检查字节预算，因此超长单行仍可能临时占用大量内存；
+     * 这是注入结果预算，不是严格的读取内存上限。跳过的开头空白行也不计入行数预算。
      */
     public Optional<String> readMemoryIndex() {
         Path index = memoryDir.resolve(INDEX_NAME);

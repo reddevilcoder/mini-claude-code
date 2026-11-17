@@ -19,6 +19,11 @@ import java.util.List;
  * （渐进式披露的第一层）；<b>正文由模型按需 Read</b>，本阶段不碰正文。这是「新增阶段不改既有组装」
  * 的又一次兑现——不改 {@link SystemPromptStage}/{@link MemoryStage}/{@link CompactionStage}，
  * 也不改 {@link ContextAssembler}，只把这一个阶段挂进管线。
+ *
+ * <p><b>面试关注：渐进式披露如何节省 Token？</b>常驻上下文只提供“能做什么、什么时候用、去哪里读”，
+ * 需要的技能才通过 Read 展开正文，代价是多一次读取及模型自行选择技能的决策。
+ * 本阶段持有启动时传入的技能清单，并不逐轮重新扫描目录；{@code listingMaxChars} 只限制清单部分，
+ * 不含行为说明、其他系统消息和随后按需读取的技能正文，不能把它当作整个技能上下文的总预算。
  */
 public class SkillStage implements AssemblyStage {
 

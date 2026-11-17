@@ -15,6 +15,11 @@ import org.springframework.ai.chat.messages.AssistantMessage;
  * <p><b>两个钩子分工要记牢</b>：{@code PlanModeHook} 回答「<b>现在能不能写</b>」（计划态下一律不能），
  * {@code ApprovalHook} 回答「<b>这次写准不准</b>」（要不要弹审批卡片）。两者在链上一前一后、职责不同、
  * 读的状态都不重叠（本钩子查 {@code planMode}、审批钩子查 {@code permissions}）。
+ *
+ * <p><b>面试关注：计划批准是否等于操作授权？</b>不是同一状态。退出计划态只解除本钩子的限制，
+ * 后续仍由 ApprovalHook 根据会话放行状态和本次审批判断；计划批准不会设置 acceptEdits。
+ * Bash 不管命令看上去是否只读，一律按非只读工具处理，避免在本层另写一套不完整的 shell 副作用分析。
+ * 记忆写入也不会绕过排在前面的计划态钩子，因此“审批自动放行”和“计划态允许执行”需要分别满足。
  */
 public class PlanModeHook implements PreExecuteHook {
 

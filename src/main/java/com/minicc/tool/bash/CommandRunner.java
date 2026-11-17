@@ -16,6 +16,18 @@ import java.util.concurrent.TimeUnit;
  *
  * <p>流程：先过 {@link CommandGuard} 粗筛危险命令 → 按是否沙箱决定 argv（{@link Sandbox}）→
  * 以项目目录为工作目录启动子进程、合并捕获 stdout/stderr → 超时则强制中止 → 输出过长则截断。
+ *
+ * <p><b>面试关注：为什么要单独读输出？</b>操作系统管道缓冲区有限，如果主线程先 waitFor，
+ * 子进程可能因输出写满而无法退出，父进程又一直等退出，形成相互等待。读线程负责消费输出，
+ * 主线程轮询退出、超时与取消。StringBuilder 自身不保证线程安全，所以追加和取快照都锁同一个对象。
+ * 合并 stderr 简化了双流消费，也意味着结果不再保留 stdout/stderr 的独立来源。
+ *
+ * <p><b>面试追问：当前进程管理有哪些边界？</b>destroyForcibly 只针对此 Process，
+ * 没有遍历 descendants 或终止进程组，不能保证 shell 启动的整个后代进程树都已结束。
+ * 超时基于墙上时钟，且轮询、终止与限时 join 都需要时间，并非严格的任务截止保证。
+ * 输出超过阈值后读线程退出并关闭管道，不是“持续消费但丢弃多余数据”，可能造成子进程写失败、SIGPIPE，
+ * 或在相关时序下出现输出阻塞；因此本实现的截断可能影响大输出命令的正常完成。更稳健的实现会持续排空
+ * 管道，仅限制保留量，或把完整输出流式落盘，同时单独管理进程组的取消和退出确认。
  */
 public class CommandRunner {
 
@@ -32,7 +44,7 @@ public class CommandRunner {
      * @param workingDir  工作目录（= 会话项目目录）
      * @param timeoutMs   超时（毫秒）
      * @param sandbox     是否包进 OS 沙箱
-     * @param cancelToken 协作式取消信号（M3）：Ctrl-C 置位后中止子进程树。可为 null（不支持取消）
+     * @param cancelToken 协作式取消信号（M3）：Ctrl-C 置位后尝试中止直接子进程。可为 null（不支持取消）
      */
     public ToolResult run(String command, Path workingDir, long timeoutMs, boolean sandbox, CancelToken cancelToken) {
         if (command == null || command.isBlank()) {
@@ -67,7 +79,7 @@ public class CommandRunner {
             long deadline = System.currentTimeMillis() + timeoutMs;
             while (!p.waitFor(POLL_MS, TimeUnit.MILLISECONDS)) {
                 if (cancelToken != null && cancelToken.isCancelled()) {
-                    p.destroyForcibly();          // 取消：中止子进程树（复用超时同一路径）
+                    p.destroyForcibly();          // 取消：请求终止此 Process；不保证其后代进程一并退出
                     reader.join(1000);
                     return ToolResult.error("命令已被用户中断（Ctrl-C）：" + command
                             + "\n" + truncate(snapshot(out)));
@@ -102,7 +114,8 @@ public class CommandRunner {
                 synchronized (sink) {
                     sink.append(buf, 0, n);
                     if (sink.length() > MAX_OUTPUT_CHARS + 1000) {
-                        // 已经远超上限，没必要再读了。
+                        // 教学简化：达到保留阈值就退出，try-with-resources 随后会关闭读端。
+                        // 这可能改变子进程的输出行为；若要只截断展示而不影响执行，应继续读取并丢弃超额部分。
                         break;
                     }
                 }
@@ -119,7 +132,7 @@ public class CommandRunner {
         }
     }
 
-    /** 超长输出截断并加标记。调用前读线程已 join，传入的是输出快照。 */
+    /** 超长输出截断并加标记。join 有时限，读线程可能仍在运行；传入的是经同步获取的独立快照。 */
     private static String truncate(String body) {
         if (body.length() <= MAX_OUTPUT_CHARS) {
             return body.stripTrailing();
