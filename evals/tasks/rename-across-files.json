@@ -1,0 +1,7 @@
+{
+  "category": "refactor",
+  "fixture": "orders",
+  "prompt": "把 Order.calc_total 方法重命名为 total，并更新项目中所有调用处，保证行为不变。",
+  "verify": "python3 check_hidden.py",
+  "max_steps": 20
+}

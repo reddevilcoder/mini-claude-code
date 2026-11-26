@@ -54,7 +54,7 @@ Claude Code 里面有不少 harness 上的工程做法，学习价值很高。�
 
 ## **关于项目的一些补充说明**
 
-这里我们说明一下：RAG、MCP、多 Agent 协作，mini Claude Code 里没有做。这部分内容，我们会放到另一个项目里讲。
+这里我们说明一下：RAG 在 mini Claude Code 里没有做。MCP 客户端（M11）与子代理（M12）已在产品化增强中实现，见下文。
 
 除此之外，我们的项目是使用Java + Spring AI开发的。Spring AI 只负责最底层的模型调用。Agent 的控制循环、工具分发、权限审批、上下文组装与压缩，这些核心逻辑全部由我们自己来写。
 
@@ -123,3 +123,9 @@ pricing:
 - `Task`（`subagent_type`: explore / plan）：只读工具、上下文隔离、只回传结论；只读且并发安全，模型一次发多个 Task 会并行调研，不弹审批，Plan Mode 可用。
 - `GeneralTask`：通用子代理，可读写与执行命令；派生需审批（可本会话放行），内部每个写操作仍走主审批钩子与主 CancelToken，写入记入主会话当前轮检查点（`/rewind` 可撤销）。
 - 深度固定为 1（子代理工具表不含 Task/GeneralTask）；子代理不流式输出；继承主代理“已读”副本，但自己的读不回流；用量累计到主会话 `/cost`。
+
+**评测、CI 与发行（M13）**
+
+- 评测：`python3 evals/run_evals.py --repeat 3 --max-cost-usd 2`。每次运行独立临时 stateDir + `--bare`；报告 pass@1 / pass@k、Token、费用；结果按（任务 + fixture + 构建产物 + 模型 + 重复序号）缓存在 `evals/.cache/`，`--no-cache` 强制重跑；`--max-cost-usd` 达到上限即停止。共 5 道题（bugfix / feature / research / ordering / 跨文件重命名重构）。
+- CI：`.github/workflows/ci.yml` 在 Ubuntu + macOS 上跑全部单测并冒烟 `mcc --help`，上传发行包；真实模型评测只在手动触发（`workflow_dispatch` 勾选 run_evals）时运行，且带费用上限。
+- 安装：`sh scripts/install.sh`（需 Java 17+，安装到 `~/.mcc/app` 并链接到 `~/.local/bin/mcc`）；或 `./gradlew jlinkDist` 生成自带精简 JRE 的 `build/jlink/mcc`，目标机器无需安装 Java。

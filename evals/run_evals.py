@@ -15,8 +15,14 @@ mini Claude Code 评测框架（M0）。
   python3 evals/run_evals.py                       # 跑全部任务，每题 3 次
   python3 evals/run_evals.py --task fix-off-by-one --repeat 1
   python3 evals/run_evals.py --label baseline      # 报告写到 evals/reports/<时间>-baseline.{json,md}
+  python3 evals/run_evals.py --max-cost-usd 2      # 累计费用超过上限即停止（需配置 pricing）
+  python3 evals/run_evals.py --no-cache            # 忽略缓存强制重跑
+
+缓存（M13）：键 = 任务定义 + fixture 内容 + mcc 构建产物 + 模型 + 第几次重复 的哈希；
+命中则直接复用上次结果，调参/改报告格式时不必重复花钱。改了代码（重新 installDist）缓存自动失效。
 """
 import argparse
+import hashlib
 import json
 import os
 import shutil
@@ -41,6 +47,31 @@ def load_tasks(only):
             continue
         tasks.append(t)
     return tasks
+
+
+def tree_hash(path):
+    h = hashlib.sha256()
+    p = Path(path)
+    files = [p] if p.is_file() else sorted(f for f in p.rglob("*") if f.is_file() and "__pycache__" not in f.parts)
+    for f in files:
+        h.update(str(f.relative_to(p.parent if p.is_file() else p)).encode())
+        h.update(f.read_bytes())
+    return h.hexdigest()
+
+
+def build_fingerprint(mcc):
+    """mcc 构建产物指纹：lib 目录下全部 jar 的哈希。"""
+    lib = Path(mcc).resolve().parent.parent / "lib"
+    return tree_hash(lib) if lib.is_dir() else tree_hash(mcc)
+
+
+def cache_key(task, build_fp, model, index):
+    h = hashlib.sha256()
+    h.update(json.dumps(task, sort_keys=True, ensure_ascii=False).encode())
+    h.update(tree_hash(ROOT / "fixtures" / task["fixture"]).encode())
+    h.update(build_fp.encode())
+    h.update(f"{model}|{index}".encode())
+    return h.hexdigest()[:32]
 
 
 def run_once(task, mcc, model, timeout_default):
@@ -82,6 +113,7 @@ def run_once(task, mcc, model, timeout_default):
             "tool_errors": report.get("tool_errors", 0),
             "prompt_tokens": usage.get("prompt_tokens", 0),
             "completion_tokens": usage.get("completion_tokens", 0),
+            "cost_usd": usage.get("cost_usd") or 0.0,
             "duration_s": round(wall, 1),
         }
     finally:
@@ -113,6 +145,7 @@ def summarize(runs, tasks):
         "avg_steps": mean("steps", runs),
         "avg_prompt_tokens": mean("prompt_tokens", runs),
         "avg_completion_tokens": mean("completion_tokens", runs),
+        "total_cost_usd": round(sum(r.get("cost_usd", 0.0) for r in runs), 4),
         "tool_error_rate": round(sum(r["tool_errors"] for r in runs) / max(1, sum(r["tool_calls"] for r in runs)), 3),
         "avg_duration_s": mean("duration_s", runs),
         "per_task": per_task,
@@ -124,7 +157,7 @@ def to_markdown(label, meta, s):
              f"- 时间：{meta['time']}  模型：{meta['model'] or '(配置默认)'}  每题重复：{meta['repeat']}",
              f"- 总运行：{s['runs']}  **pass@1：{s['pass_at_1']:.1%}**  pass@{meta['repeat']}：{s['pass_at_k']:.1%}",
              f"- 平均步数：{s['avg_steps']}  平均 prompt/completion Token：{s['avg_prompt_tokens']} / "
-             f"{s['avg_completion_tokens']}  工具错误率：{s['tool_error_rate']:.1%}  平均耗时：{s['avg_duration_s']}s",
+             f"{s['avg_completion_tokens']}  总费用：${s['total_cost_usd']}  工具错误率：{s['tool_error_rate']:.1%}  平均耗时：{s['avg_duration_s']}s",
              "", "| 任务 | 类别 | 通过率 | 平均步数 | 平均 prompt Token | 平均耗时(s) |", "|---|---|---|---|---|---|"]
     for p in s["per_task"]:
         lines.append(f"| {p['task']} | {p['category']} | {p['pass_rate']:.0%} | {p['avg_steps']} | "
@@ -140,6 +173,8 @@ def main():
     ap.add_argument("--label", default="run")
     ap.add_argument("--mcc", default=str(DEFAULT_MCC))
     ap.add_argument("--timeout", type=int, default=600, help="单次运行默认超时（秒）")
+    ap.add_argument("--max-cost-usd", type=float, help="累计费用上限，超过即停止后续运行")
+    ap.add_argument("--no-cache", action="store_true", help="不读缓存（仍会写入）")
     args = ap.parse_args()
 
     if not Path(args.mcc).exists():
@@ -150,16 +185,36 @@ def main():
     if not tasks:
         sys.exit("没有匹配的任务")
 
-    runs = []
+    cache_dir = ROOT / ".cache"
+    cache_dir.mkdir(exist_ok=True)
+    build_fp = build_fingerprint(args.mcc)
+    runs, spent, stopped = [], 0.0, False
     for t in tasks:
         for i in range(args.repeat):
-            r = run_once(t, args.mcc, args.model, args.timeout)
+            if args.max_cost_usd is not None and spent >= args.max_cost_usd:
+                stopped = True
+                break
+            cache_file = cache_dir / f"{cache_key(t, build_fp, args.model, i)}.json"
+            cached = cache_file.exists() and not args.no_cache
+            if cached:
+                r = json.loads(cache_file.read_text(encoding="utf-8"))
+            else:
+                r = run_once(t, args.mcc, args.model, args.timeout)
+                if r["agent_status"] != "harness_error":
+                    cache_file.write_text(json.dumps(r, ensure_ascii=False), encoding="utf-8")
+                spent += r.get("cost_usd", 0.0)
             runs.append(r)
             mark = "PASS" if r["passed"] else "FAIL"
-            print(f"[{mark}] {t['id']} #{i + 1}  steps={r['steps']} tokens={r['prompt_tokens']}+"
-                  f"{r['completion_tokens']} {r['duration_s']}s {r['error'] or ''}", flush=True)
+            print(f"[{mark}] {t['id']} #{i + 1}{' (cache)' if cached else ''}  steps={r['steps']} "
+                  f"tokens={r['prompt_tokens']}+{r['completion_tokens']} ${r.get('cost_usd', 0)} "
+                  f"{r['duration_s']}s {r['error'] or ''}", flush=True)
+        if stopped:
+            break
+    if stopped:
+        print(f"⚠ 已达到费用上限 ${args.max_cost_usd}（本次新花费 ${spent:.4f}），后续运行已跳过。", flush=True)
 
-    meta = {"time": time.strftime("%Y-%m-%d %H:%M:%S"), "model": args.model, "repeat": args.repeat}
+    meta = {"time": time.strftime("%Y-%m-%d %H:%M:%S"), "model": args.model, "repeat": args.repeat,
+            "build": build_fp[:12], "cost_capped": stopped}
     summary = summarize(runs, tasks)
     out = ROOT / "reports"
     out.mkdir(exist_ok=True)

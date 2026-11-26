@@ -69,3 +69,38 @@ test {
 run {
     standardInput = System.in
 }
+
+// M13：自包含发行包。用 jlink 裁剪出最小 JRE，和 installDist 产物放在一起，用户机器无需安装 Java。
+// 产物：build/jlink/mcc（bin/mcc 启动脚本会优先使用同目录的 runtime/）。
+// 模块列表手工维护：依赖都是非模块化 jar，jdeps 自动推导不可靠，宁可多带几个常用模块。
+def jlinkModules = 'java.base,java.logging,java.naming,java.net.http,java.sql,java.xml,java.management,' +
+        'java.desktop,java.instrument,java.security.jgss,jdk.crypto.ec,jdk.unsupported,jdk.zipfs,jdk.localedata'
+
+tasks.register('jlinkDist') {
+    group = 'distribution'
+    description = '构建自带精简 JRE 的发行目录 build/jlink/mcc'
+    dependsOn 'installDist'
+    def outDir = layout.buildDirectory.dir('jlink/mcc')
+    outputs.dir outDir
+    doLast {
+        def launcher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(17) }.get()
+        def jlink = launcher.metadata.installationPath.file('bin/jlink').asFile
+        def target = outDir.get().asFile
+        project.delete(target)
+        project.copy {
+            from layout.buildDirectory.dir('install/mcc')
+            into target
+        }
+        project.exec {
+            commandLine jlink.absolutePath, '--add-modules', jlinkModules,
+                    '--strip-debug', '--no-header-files', '--no-man-pages', '--compress=2',
+                    '--include-locales=en,zh',
+                    '--output', new File(target, 'runtime').absolutePath
+        }
+        // 启动脚本：未设置 JAVA_HOME 时使用自带 runtime。
+        def script = new File(target, 'bin/mcc')
+        script.text = script.text.replaceFirst('(?m)^# Determine the Java command to use to start the JVM\\.',
+                '[ -z "\\$JAVA_HOME" ] && [ -x "\\$APP_HOME/runtime/bin/java" ] && JAVA_HOME="\\$APP_HOME/runtime"\n' +
+                '# Determine the Java command to use to start the JVM.')
+    }
+}

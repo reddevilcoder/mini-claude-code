@@ -19,3 +19,9 @@ gradle-app.setting
 
 # # Work around https://youtrack.jetbrains.com/issue/IDEA-116898
 # gradle/wrapper/gradle-wrapper.properties
+
+# Python 缓存与评测运行缓存
+__pycache__/
+*.pyc
+evals/.cache/
+evals/reports/
