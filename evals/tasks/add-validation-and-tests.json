@@ -1,0 +1,7 @@
+{
+  "category": "feature+tests",
+  "fixture": "inventory",
+  "prompt": "给 inventory.py 的 Inventory 加参数校验：add/remove 的数量必须是正整数，remove 不能让库存变成负数，违反时抛 ValueError 且库存保持不变。然后新建 test_inventory.py，用 unittest 覆盖这些规则，并确保测试通过。",
+  "verify": "python3 check_hidden.py",
+  "max_steps": 30
+}

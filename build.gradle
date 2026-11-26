@@ -57,7 +57,7 @@ dependencies {
 application {
     // 程序入口：启动交互式会话（REPL）。
     mainClass = 'com.minicc.MccApplication'
-    // 生成的启动脚本名为 mcc（见 build/install/mini-claude-code/bin/mcc）。
+    // installDist 生成启动脚本 build/install/mcc/bin/mcc。
     applicationName = 'mcc'
 }
 

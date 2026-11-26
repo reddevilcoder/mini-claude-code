@@ -1,0 +1,7 @@
+{
+  "category": "bugfix-spec",
+  "fixture": "textstats",
+  "prompt": "textstats.top_words 的结果在词频相同时顺序不稳定。请改成：按词频降序，词频相同按字母升序；n 大于词数时返回全部，n<=0 返回空列表。",
+  "verify": "python3 check_hidden.py",
+  "max_steps": 20
+}

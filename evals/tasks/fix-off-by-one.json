@@ -1,0 +1,7 @@
+{
+  "category": "bugfix",
+  "fixture": "pricing",
+  "prompt": "运行 python3 -m unittest -q 时有测试失败，请找出原因并修复 pricing.py（不要修改测试文件）。",
+  "verify": "python3 -m unittest -q && echo 'c20325f3787c5a7f47733ba0ea360e70b89e992df4c377521458aba00fa9b27a  test_pricing.py' | shasum -a 256 -c -",
+  "max_steps": 20
+}

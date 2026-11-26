@@ -55,7 +55,12 @@ public class CommandRunner {
             return ToolResult.error("该命令被安全护栏拦截，拒绝执行：" + command);
         }
 
-        List<String> argv = sandbox ? Sandbox.wrap(command, workingDir) : Sandbox.plain(command);
+        List<String> argv;
+        try {
+            argv = sandbox ? Sandbox.wrap(command, workingDir) : Sandbox.plain(command);
+        } catch (IllegalStateException e) {
+            return ToolResult.error(e.getMessage());
+        }
         ProcessBuilder pb = new ProcessBuilder(argv)
                 .directory(workingDir.toFile())
                 .redirectErrorStream(true); // stderr 合并进 stdout

@@ -1,0 +1,7 @@
+{
+  "category": "research",
+  "fixture": "legacy-config",
+  "prompt": "调研这个项目：请求超时时间是由哪个环境变量控制的？代码里有哪些文件用到了这个超时配置？把结论写进项目根目录的 ANSWER.md（列出环境变量名和每个使用它的文件名）。不要修改任何其它文件。",
+  "verify": "sh check_hidden.sh",
+  "max_steps": 20
+}

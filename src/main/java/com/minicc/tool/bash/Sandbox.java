@@ -50,8 +50,22 @@ public final class Sandbox {
         if (os.contains("linux") && hasExecutable("bwrap")) {
             return bubblewrapArgv(command, projectDir);
         }
+        if (strict) {
+            // M0：无人值守（--permission auto）时不允许降级为裸执行。
+            throw new IllegalStateException("未检测到可用沙箱（sandbox-exec / bwrap），严格模式下拒绝执行 Bash 命令。");
+        }
         warnOnce();
         return List.of("/bin/sh", "-c", command);
+    }
+
+    /**
+     * 严格模式（fail-closed）：沙箱不可用时拒绝执行，而不是降级裸跑。
+     * 交互模式保持原来的"易用性优先"降级；Headless + 自动批准时必须开启。
+     */
+    private static volatile boolean strict = false;
+
+    public static void setStrict(boolean value) {
+        strict = value;
     }
 
     /** 不加沙箱时的直接执行形式。 */
