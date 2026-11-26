@@ -51,7 +51,7 @@ public class PermissionState {
         if (isBash(tool)) {                  // Bash：按命令前缀判断
             return allowedBashPrefixes.contains(bashPrefix(call));
         }
-        if (isMcp(tool)) {                   // M11：MCP 工具按“完整工具名”放行，绝不按 Server 整体放行
+        if (isNamedGrant(tool)) {            // M11/M12：MCP 工具、GeneralTask 按“完整工具名”放行，绝不按 Server 整体放行
             return allowedMcpTools.contains(tool.name());
         }
         return false;
@@ -63,7 +63,7 @@ public class PermissionState {
             acceptEdits = true;                        // 整个会话的文件修改都放行
         } else if (isBash(tool)) {
             allowedBashPrefixes.add(bashPrefix(call)); // 该前缀的命令都放行
-        } else if (isMcp(tool)) {
+        } else if (isNamedGrant(tool)) {
             allowedMcpTools.add(tool.name());          // 只放行这一个 MCP 工具
         }
     }
@@ -90,8 +90,8 @@ public class PermissionState {
     }
 
     /** 是否 Bash 工具。 */
-    private static boolean isMcp(Tool tool) {
-        return tool.name().startsWith("mcp__");
+    private static boolean isNamedGrant(Tool tool) {
+        return tool.name().startsWith("mcp__") || "GeneralTask".equals(tool.name());
     }
 
     private static boolean isBash(Tool tool) {

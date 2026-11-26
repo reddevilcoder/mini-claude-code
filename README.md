@@ -117,3 +117,9 @@ pricing:
 - 默认非只读、串行执行、走审批（可按单个工具“本会话放行”），Plan Mode 下被拦截；`readOnlyHint` 默认不可信，需在该 Server 上显式 `"trustReadOnlyHint": true`。
 - 大结果走 ToolResultCompactor 落盘；`/mcp` 查看状态，`/mcp reconnect [name]` 重连；stderr 写入 `~/.mcc/logs/mcp-<name>.log`。
 - ⚠ MCP Server 是本机进程，**不在 Bash 沙箱内运行**，只配置你信任的 Server。`--bare` 模式不加载 MCP。
+
+**子代理（M12）**
+
+- `Task`（`subagent_type`: explore / plan）：只读工具、上下文隔离、只回传结论；只读且并发安全，模型一次发多个 Task 会并行调研，不弹审批，Plan Mode 可用。
+- `GeneralTask`：通用子代理，可读写与执行命令；派生需审批（可本会话放行），内部每个写操作仍走主审批钩子与主 CancelToken，写入记入主会话当前轮检查点（`/rewind` 可撤销）。
+- 深度固定为 1（子代理工具表不含 Task/GeneralTask）；子代理不流式输出；继承主代理“已读”副本，但自己的读不回流；用量累计到主会话 `/cost`。

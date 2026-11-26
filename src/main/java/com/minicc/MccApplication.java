@@ -21,6 +21,8 @@ import com.minicc.compact.ToolResultCompactor;
 import com.minicc.cli.command.McpCommand;
 import com.minicc.mcp.McpConfig;
 import com.minicc.mcp.McpManager;
+import com.minicc.agent.SubAgentRunner;
+import com.minicc.tool.builtin.TaskTool;
 import com.minicc.config.ConfigLoader;
 import com.minicc.config.MccConfig;
 import com.minicc.context.CompactionStage;
@@ -276,6 +278,17 @@ public class MccApplication {
         }
         mcp.configErrors().forEach(e -> renderer.warn("MCP 配置：" + e));
 
+        // 1.6) 子代理（M12）。钩子链：PlanModeHook（现在能不能写）排在 ApprovalHook（这次写准不准）之前：放在 MCP 之后注册，子代理运行时按类型过滤父工具表（General 也能用 MCP 工具）。
+        //      模型边界与钩子链提前创建：子代理与主循环共用同一个 ModelClient（用量统一累计）与钩子链。
+        ModelClient modelClient = new ModelClient(config);
+        HookChain hookChain = new HookChain(List.of(
+                new PlanModeHook(),
+                new ApprovalHook(interaction.approver())));
+        SubAgentRunner subAgents = new SubAgentRunner(modelClient, registry, hookChain, config,
+                SubAgentRunner.DEFAULT_MAX_STEPS);
+        registry.register(TaskTool.readOnly(subAgents));
+        registry.register(TaskTool.general(subAgents));
+
         // 2) 长期记忆（M5）。记忆目录挂在 stateDir 结构下（~/.mcc/projects/<项目>/memory/）。
         Path stateDir = resolveStateDir(config.stateDir());
         SessionPaths paths = new SessionPaths(stateDir);
@@ -283,12 +296,6 @@ public class MccApplication {
         AgentMemory agentMemory = new AgentMemory(workingDir, stateDir);
         AutoMemory autoMemory = new AutoMemory(memoryDir);
         autoMemory.ensureMemoryDirExists();
-
-        // 3) 模型边界与钩子链：PlanModeHook（现在能不能写）排在 ApprovalHook（这次写准不准）之前。
-        ModelClient modelClient = new ModelClient(config);
-        HookChain hookChain = new HookChain(List.of(
-                new PlanModeHook(),
-                new ApprovalHook(interaction.approver())));
 
         // 4) 分层压缩（M6）。
         Map<String, Integer> budgetByTool = new HashMap<>(config.toolResultBudget());

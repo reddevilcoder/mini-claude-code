@@ -65,7 +65,7 @@ public class CliApprover implements Approver {
             String prefix = ctx.permissions().bashPrefix(call);
             return "允许，本会话内的所有 " + prefix + " 命令不再询问";
         }
-        if (name.startsWith("mcp__")) {
+        if (name.startsWith("mcp__") || "GeneralTask".equals(name)) {
             return "允许，本会话内 " + name + " 不再询问";
         }
         // Edit / Write 及其它写操作。
@@ -133,6 +133,13 @@ public class CliApprover implements Approver {
                 return lines;
             }
             default:
+                if ("GeneralTask".equals(name)) {   // M12：展示派生的子任务
+                    List<String> lines = new ArrayList<>();
+                    lines.add("派生通用子代理：" + ToolCallHelper.getString(call, "description", ""));
+                    lines.addAll(splitFew(ToolCallHelper.getString(call, "prompt", ""), 6));
+                    lines.add("（子代理内部的写操作仍会逐个请求批准）");
+                    return lines;
+                }
                 if (name.startsWith("mcp__")) {   // M11：MCP 工具展示参数与“不在沙箱”提示
                     List<String> lines = new ArrayList<>();
                     lines.add("MCP 工具（Server 不在沙箱内运行）");

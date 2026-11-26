@@ -29,6 +29,10 @@ public interface FileCheckpoint {
     /** 写入成功后记录改后状态。 */
     void after(Path file);
 
+    /** M12：记录本轮执行过的 Bash（子代理也要记到主会话的当前轮次，/rewind 才能如实提示）。 */
+    default void noteBash(String command) {
+    }
+
     /** 绑定到某个会话检查点与当前轮次。memoryDir 下的写入（记忆文件）不纳入回退。 */
     static FileCheckpoint of(CheckpointStore store, String turnId, Path excludeDir) {
         if (store == null || !store.enabled() || turnId == null) {
@@ -52,6 +56,11 @@ public interface FileCheckpoint {
                 if (!skip(file)) {
                     store.afterWrite(turnId, file);
                 }
+            }
+
+            @Override
+            public void noteBash(String command) {
+                store.noteBash(turnId, command);
             }
         };
     }

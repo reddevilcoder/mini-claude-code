@@ -40,6 +40,13 @@ public class WorkspaceState {
         return readFiles.contains(normalize(file));
     }
 
+    /** M12：拷贝一份给子代理：子代理继承“主代理已读”，但它自己读过的不回流主代理（主模型并没看到内容）。 */
+    public WorkspaceState copy() {
+        WorkspaceState c = new WorkspaceState();
+        c.readFiles.addAll(readFiles);
+        return c;
+    }
+
     /** 清空全部已读标记（/clear）。 */
     public void clear() {
         readFiles.clear();
