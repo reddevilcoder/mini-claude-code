@@ -40,6 +40,9 @@ public class PermissionState {
     /** Bash：本会话已放行的命令前缀（如 "mvn"、"git"）。 */
     private final Set<String> allowedBashPrefixes = ConcurrentHashMap.newKeySet();
 
+    /** M11：本会话已放行的 MCP 工具（完整暴露名）。 */
+    private final Set<String> allowedMcpTools = ConcurrentHashMap.newKeySet();
+
     /** 该工具调用本会话是否已被放行。 */
     public boolean isGranted(AssistantMessage.ToolCall call, Tool tool) {
         if (isFileEdit(tool)) {              // Edit / Write
@@ -47,6 +50,9 @@ public class PermissionState {
         }
         if (isBash(tool)) {                  // Bash：按命令前缀判断
             return allowedBashPrefixes.contains(bashPrefix(call));
+        }
+        if (isMcp(tool)) {                   // M11：MCP 工具按“完整工具名”放行，绝不按 Server 整体放行
+            return allowedMcpTools.contains(tool.name());
         }
         return false;
     }
@@ -57,6 +63,8 @@ public class PermissionState {
             acceptEdits = true;                        // 整个会话的文件修改都放行
         } else if (isBash(tool)) {
             allowedBashPrefixes.add(bashPrefix(call)); // 该前缀的命令都放行
+        } else if (isMcp(tool)) {
+            allowedMcpTools.add(tool.name());          // 只放行这一个 MCP 工具
         }
     }
 
@@ -82,6 +90,10 @@ public class PermissionState {
     }
 
     /** 是否 Bash 工具。 */
+    private static boolean isMcp(Tool tool) {
+        return tool.name().startsWith("mcp__");
+    }
+
     private static boolean isBash(Tool tool) {
         return "Bash".equals(tool.name());
     }

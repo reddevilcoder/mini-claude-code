@@ -101,3 +101,19 @@ pricing:
 - 审批卡片展示统一 diff（`Tool.preview()` 先算出改动，再决定是否写入）。
 - `/rewind`：选择某一轮，回退「文件 + 对话 / 仅对话 / 仅文件」。对话回退以 JSONL 为准并追加 `REWIND` 事件（不改写日志，压缩后依然正确，`/resume` 也能正确重放）；文件回退检测外部修改冲突，可跳过或强制覆盖。
 - 局限：Bash 的副作用无法撤销，回退前会列出这些轮次执行过的命令作为提醒。
+
+**MCP 客户端（M11）**
+
+手写 JSON-RPC 2.0 over stdio（`Transport` 接口隔离传输层，可扩展 HTTP），支持 initialize 握手、`tools/list` 分页、`tools/call`、超时与 Ctrl-C 时发送 `notifications/cancelled`。在 `~/.mcc/mcp.json` 配置：
+
+```json
+{ "mcpServers": {
+    "github": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-github"],
+                "env": { "GITHUB_TOKEN": "${GITHUB_TOKEN}" }, "timeoutMs": 60000 } } }
+```
+
+- 只认全局白名单配置（不读项目目录，防止恶意仓库拉起进程）；密钥类 env 必须写成 `${VAR}` 引用。
+- 工具暴露为 `mcp__<server>__<tool>`，名字清洗为 `^[a-zA-Z0-9_-]{1,64}$` 并处理冲突。
+- 默认非只读、串行执行、走审批（可按单个工具“本会话放行”），Plan Mode 下被拦截；`readOnlyHint` 默认不可信，需在该 Server 上显式 `"trustReadOnlyHint": true`。
+- 大结果走 ToolResultCompactor 落盘；`/mcp` 查看状态，`/mcp reconnect [name]` 重连；stderr 写入 `~/.mcc/logs/mcp-<name>.log`。
+- ⚠ MCP Server 是本机进程，**不在 Bash 沙箱内运行**，只配置你信任的 Server。`--bare` 模式不加载 MCP。

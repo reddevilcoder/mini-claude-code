@@ -194,6 +194,11 @@ public class Repl {
         add(new RewindCommand(session, prompter, renderer));                        // M10：回退
     }
 
+    /** M11：装配阶段按需追加的命令（如 /mcp）。 */
+    public void registerCommand(SlashCommand command) {
+        add(command);
+    }
+
     private void add(SlashCommand command) {
         commands.put(command.name(), command);
     }

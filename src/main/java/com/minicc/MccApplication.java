@@ -18,6 +18,9 @@ import com.minicc.compact.ContextCollapser;
 import com.minicc.compact.MicroCompactor;
 import com.minicc.compact.SnipCompactor;
 import com.minicc.compact.ToolResultCompactor;
+import com.minicc.cli.command.McpCommand;
+import com.minicc.mcp.McpConfig;
+import com.minicc.mcp.McpManager;
 import com.minicc.config.ConfigLoader;
 import com.minicc.config.MccConfig;
 import com.minicc.context.CompactionStage;
@@ -103,7 +106,7 @@ public class MccApplication {
     private record Harness(AgentLoop agentLoop, Session session, ToolRegistry registry, ModelClient modelClient,
                            SessionPaths paths, Path stateDir, AutoMemory autoMemory,
                            CompactionManager compactionManager, MemoryStage memoryStage,
-                           List<Skill> skills, boolean skillsEnabled) {
+                           List<Skill> skills, boolean skillsEnabled, McpManager mcp) {
     }
 
     public static void main(String[] args) {
@@ -164,9 +167,11 @@ public class MccApplication {
                 rt.paths(), prompter, rt.stateDir(), rt.autoMemory(), VERSION, config.model(),
                 config, rt.compactionManager(), rt.memoryStage(),
                 rt.skills(), rt.skillsEnabled(), rt.modelClient().usage());
+        repl.registerCommand(new McpCommand(rt.mcp(), renderer));                  // M11
         try {
             repl.start();
         } finally {
+            rt.mcp().close();
             try {
                 terminal.close();
             } catch (IOException ignore) {
@@ -208,7 +213,12 @@ public class MccApplication {
                 renderer, cancelToken, !options.bare(), !options.bare());
 
         rt.session().appendUserMessage(options.prompt());
-        RunResult result = rt.agentLoop().run(rt.session());
+        RunResult result;
+        try {
+            result = rt.agentLoop().run(rt.session());
+        } finally {
+            rt.mcp().close();
+        }
         long durationMs = (System.nanoTime() - startNanos) / 1_000_000;
 
         HeadlessReport report = HeadlessReport.of(result, rt.session().sessionId(), config.model(),
@@ -252,6 +262,19 @@ public class MccApplication {
         registry.register(new AskUserQuestionTool(interaction.asker()));
         registry.register(new EnterPlanModeTool(interaction.planApprover()));
         registry.register(new ExitPlanModeTool(interaction.planApprover()));
+
+        // 1.5) MCP（M11）：只启动 ~/.mcc/mcp.json 白名单里的 Server；--bare 不加载，保证评测可复现。
+        //      必须在计算工具结果预算之前注册，MCP 大结果才会走 ToolResultCompactor。
+        McpManager mcp = new McpManager(
+                enableSkills ? McpConfig.load(McpConfig.defaultPath()) : new McpConfig.Loaded(List.of(), List.of()),
+                registry, McpManager.stdioFactory(workingDir, resolveStateDir(config.stateDir())));
+        mcp.connectAll();
+        for (var h : mcp.servers()) {
+            if (!h.status().startsWith("已连接")) {
+                renderer.warn("MCP " + h.name() + "：" + h.status());
+            }
+        }
+        mcp.configErrors().forEach(e -> renderer.warn("MCP 配置：" + e));
 
         // 2) 长期记忆（M5）。记忆目录挂在 stateDir 结构下（~/.mcc/projects/<项目>/memory/）。
         Path stateDir = resolveStateDir(config.stateDir());
@@ -330,7 +353,7 @@ public class MccApplication {
                 new CheckpointStore(paths.checkpointDir(workingDir, sessionId)));   // M10
 
         return new Harness(agentLoop, session, registry, modelClient, paths, stateDir, autoMemory,
-                compactionManager, memoryStage, skills, skillsEnabled);
+                compactionManager, memoryStage, skills, skillsEnabled, mcp);
     }
 
     /** 把配置里的 stateDir 解析成绝对路径：展开前导 {@code ~} 为用户主目录（默认 ~/.mcc）。 */

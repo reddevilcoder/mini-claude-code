@@ -27,6 +27,11 @@ public class ToolRegistry {
     }
 
     /** 按名字查找工具。 */
+    /** M11：注销工具（MCP 重连时替换旧工具）。 */
+    public void remove(String name) {
+        tools.remove(name);
+    }
+
     public Optional<Tool> find(String name) {
         return Optional.ofNullable(tools.get(name));
     }
