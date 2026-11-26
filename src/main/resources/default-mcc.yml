@@ -46,3 +46,17 @@ skills:
 
 # API Key 不写在这里，请通过环境变量提供：
 #   export OPENAI_API_KEY=sk-xxxx
+
+# M9：模型调用策略。
+stream: true                 # 流式输出（逐字上屏、Ctrl-C 立即断开请求）；false 则整条返回后再显示
+retry:
+  maxAttempts: 3             # 单次请求最多尝试次数（含首次）。只重试 429/5xx/超时/网络错误，且仅在尚未输出任何内容时
+  initialBackoffMs: 1000     # 退避基数，之后指数翻倍并加随机抖动
+
+# M9：按模型计价（美元 / 百万 Token），用于 /cost 与 headless 的 cost_usd。不配置则只显示 Token。
+# 价格会变，请以厂商官网为准；cacheRead 可省略（省略则缓存命中按 input 计）。
+# pricing:
+#   deepseek-flash:
+#     input: 0.27
+#     output: 1.10
+#     cacheRead: 0.07

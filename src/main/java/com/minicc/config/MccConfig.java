@@ -31,6 +31,7 @@ import java.util.Map;
  * @param compact          M6：分层压缩的触发阈值
  * @param toolResultBudget M6：各工具结果落盘阈值（字符数；{@code -1} 表示无限、永不落盘）
  * @param skills           M7：Skills 配置（开关 + 清单字符预算）
+ * @param modelSettings    M9：模型调用策略（流式开关、重试、按模型计价）
  */
 public record MccConfig(
         String model,
@@ -43,7 +44,39 @@ public record MccConfig(
         String stateDir,
         CompactSettings compact,
         Map<String, Integer> toolResultBudget,
-        SkillSettings skills) {
+        SkillSettings skills,
+        ModelSettings modelSettings) {
+
+    /**
+     * M9：模型调用策略（配置里的 {@code stream} / {@code retry} / {@code pricing}）。
+     *
+     * @param stream                 是否流式输出（默认开）
+     * @param retryMaxAttempts       单次模型请求最多尝试次数（含首次；1 表示不重试）
+     * @param retryInitialBackoffMs  首次重试前的退避基数（毫秒），之后指数翻倍并加抖动
+     * @param pricing                模型名 → 单价（美元 / 百万 Token）；未配置的模型不计费用
+     */
+    public record ModelSettings(
+            boolean stream,
+            int retryMaxAttempts,
+            long retryInitialBackoffMs,
+            Map<String, Price> pricing) {
+    }
+
+    /**
+     * 单价（美元 / 百万 Token）。{@code cacheReadPerMTok} 为 null 时缓存命中按输入价计。
+     */
+    public record Price(double inputPerMTok, double outputPerMTok, Double cacheReadPerMTok) {
+    }
+
+    /** 当前模型的单价；未配置返回 null（费用显示为“未配置价格”，而不是猜一个数）。 */
+    public Price price() {
+        return modelSettings == null || modelSettings.pricing() == null ? null : modelSettings.pricing().get(model);
+    }
+
+    /** 是否流式输出。 */
+    public boolean stream() {
+        return modelSettings == null || modelSettings.stream();
+    }
 
     /**
      * M6：分层压缩的触发阈值（配置里的 {@code compact} 段）。
@@ -89,6 +122,16 @@ public record MccConfig(
                      CompactSettings compact, Map<String, Integer> toolResultBudget) {
         this(model, maxSteps, contextLimit, apiKey, baseUrl, sandbox, bashTimeoutMs, stateDir,
                 compact, toolResultBudget, DEFAULT_SKILLS);
+    }
+
+    /**
+     * 向后兼容构造器：保留 M7 的 11 参签名，M9 模型策略用默认值补齐。
+     */
+    public MccConfig(String model, int maxSteps, int contextLimit, String apiKey, String baseUrl,
+                     boolean sandbox, long bashTimeoutMs, String stateDir,
+                     CompactSettings compact, Map<String, Integer> toolResultBudget, SkillSettings skills) {
+        this(model, maxSteps, contextLimit, apiKey, baseUrl, sandbox, bashTimeoutMs, stateDir,
+                compact, toolResultBudget, skills, DEFAULT_MODEL_SETTINGS);
     }
 
     /** 默认模型。 */
@@ -140,6 +183,10 @@ public record MccConfig(
     /** 默认 Skills 配置。 */
     public static final SkillSettings DEFAULT_SKILLS = new SkillSettings(
             DEFAULT_SKILLS_ENABLED, DEFAULT_SKILLS_LISTING_MAX_CHARS);
+
+    // ---- M9 默认值 ----
+    /** 默认模型策略：流式开、最多 3 次尝试、退避基数 1s、不内置任何价格。 */
+    public static final ModelSettings DEFAULT_MODEL_SETTINGS = new ModelSettings(true, 3, 1000, Map.of());
 
     // ---- M6 便捷访问器（让压缩模块的代码读起来更直观）----
 

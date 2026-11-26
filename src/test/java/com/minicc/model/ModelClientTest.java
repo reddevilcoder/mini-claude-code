@@ -1,9 +1,12 @@
 package com.minicc.model;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.minicc.config.MccConfig;
 import com.minicc.tool.Tool;
 import com.minicc.tool.ToolContext;
 import com.minicc.tool.ToolResult;
+import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
@@ -15,10 +18,14 @@ import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import reactor.core.publisher.Flux;
 
+import java.net.InetSocketAddress;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 
 /**
@@ -43,7 +50,60 @@ class ModelClientTest {
         assertEquals(messages, chatModel.prompt.getInstructions());
         OpenAiChatOptions options = (OpenAiChatOptions) chatModel.prompt.getOptions();
         assertEquals("fake-model", options.getModel());
+        assertNull(options.getReasoningEffort());
         assertEquals("Read", options.getToolCallbacks().get(0).getToolDefinition().name());
+    }
+
+    @Test
+    void disablesReasoningForGpt6LunaToolCalls() throws Exception {
+        AtomicReference<String> requestPath = new AtomicReference<>();
+        AtomicReference<String> requestBody = new AtomicReference<>();
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/", exchange -> {
+            try {
+                requestPath.set(exchange.getRequestURI().getPath());
+                requestBody.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+                byte[] response = """
+                        {
+                          "id": "chatcmpl-local-test",
+                          "object": "chat.completion",
+                          "created": 1,
+                          "model": "gpt-6-luna",
+                          "choices": [{
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "local response"},
+                            "finish_reason": "stop"
+                          }],
+                          "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+                        }
+                        """.getBytes(StandardCharsets.UTF_8);
+                exchange.getResponseHeaders().set("Content-Type", "application/json");
+                exchange.sendResponseHeaders(200, response.length);
+                exchange.getResponseBody().write(response);
+            } finally {
+                exchange.close();
+            }
+        });
+        server.start();
+        try {
+            String baseUrl = "http://127.0.0.1:" + server.getAddress().getPort() + "/v1";
+            MccConfig config = new MccConfig("gpt-6-luna", 40, 200000, "test-only-key", baseUrl,
+                    false, 120000, MccConfig.DEFAULT_STATE_DIR);
+            ModelClient client = new ModelClient(config);
+
+            AssistantMessage reply = client.call(List.of(new UserMessage("读取文件")), List.of(new StubTool("Read")));
+
+            assertEquals("/v1/chat/completions", requestPath.get());
+            JsonNode body = new ObjectMapper().readTree(requestBody.get());
+            assertEquals("gpt-6-luna", body.path("model").asText());
+            assertEquals("none", body.path("reasoning_effort").asText());
+            assertEquals(1, body.path("tools").size());
+            assertEquals("function", body.path("tools").path(0).path("type").asText());
+            assertEquals("Read", body.path("tools").path(0).path("function").path("name").asText());
+            assertEquals("local response", reply.getText());
+        } finally {
+            server.stop(0);
+        }
     }
 
     private static MccConfig config() {

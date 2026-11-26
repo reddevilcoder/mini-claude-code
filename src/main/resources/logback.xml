@@ -6,6 +6,8 @@
             <pattern>%d{HH:mm:ss} %-5level %logger{20} - %msg%n</pattern>
         </encoder>
     </appender>
+    <!-- M9：流式出错时 Spring AI 的聚合器会打整段堆栈；错误已由 ModelClient 重试/上抛并在终端友好展示，这里静音。 -->
+    <logger name="org.springframework.ai.chat.model.MessageAggregator" level="OFF"/>
     <root level="WARN">
         <appender-ref ref="STDERR"/>
     </root>

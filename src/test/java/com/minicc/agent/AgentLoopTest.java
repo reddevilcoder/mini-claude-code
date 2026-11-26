@@ -129,6 +129,42 @@ class AgentLoopTest {
         assertTrue(output.indexOf("思考：文件里只有类声明。") < output.indexOf("这是一个空的 Hello 类。"));
     }
 
+    /** M9：流式请求进行中被取消 → 返回 CANCELLED，半截助手消息不进历史。 */
+    @Test
+    void cancelDuringStreamLeavesNoPartialMessage(@TempDir Path dir) {
+        CancelToken token = new CancelToken();
+        ChatModel hanging = new ChatModel() {
+            @Override
+            public ChatResponse call(Prompt prompt) {
+                throw new UnsupportedOperationException();
+            }
+
+            @Override
+            public Flux<ChatResponse> stream(Prompt prompt) {
+                new Thread(() -> {
+                    try {
+                        Thread.sleep(200);
+                    } catch (InterruptedException ignore) {
+                    }
+                    token.cancel();
+                }).start();
+                return Flux.concat(Flux.just(new ChatResponse(List.of(new Generation(new AssistantMessage("写到一半"))))),
+                        Flux.never());
+            }
+        };
+        MccConfig config = new MccConfig("fake-model", 40, 200000, "", "http://localhost", false, 120000,
+                MccConfig.DEFAULT_STATE_DIR);
+        ContextAssembler assembler = new ContextAssembler(List.of(
+                new SystemPromptStage(SystemPrompt.TEXT), new HistoryStage()));
+        AgentLoop loop = new AgentLoop(new ModelClient(hanging, config), assembler, new ToolRegistry(),
+                new HookChain(List.of()), new Renderer(new PrintStream(new ByteArrayOutputStream())), config, token);
+        Session session = new Session(dir);
+        session.appendUserMessage("写点什么");
+        RunResult r = loop.run(session);
+        assertEquals(RunResult.Status.CANCELLED, r.status());
+        assertEquals(1, session.size());   // 只有用户消息
+    }
+
     /** 按预设脚本逐次返回助手消息的假 ChatModel。 */
     private static class ScriptedChatModel implements ChatModel {
         private final List<AssistantMessage> script;
@@ -147,7 +183,7 @@ class AgentLoopTest {
 
         @Override
         public Flux<ChatResponse> stream(Prompt prompt) {
-            throw new UnsupportedOperationException("测试不使用流式接口");
+            return Flux.just(call(prompt)); // M9：整条消息作为单个分片
         }
     }
 }

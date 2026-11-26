@@ -24,6 +24,24 @@ import java.util.stream.Collectors;
  */
 public class Renderer {
 
+    /**
+     * 输出目标。交互模式是 stdout；Headless JSON 模式把过程渲染改到 stderr，
+     * 让 stdout 只留一份机器可读的结果（M0）。
+     */
+    private final java.io.PrintStream fixedOut;   // null 表示每次取当前 System.out（便于测试重定向）
+
+    public Renderer() {
+        this(null);
+    }
+
+    public Renderer(java.io.PrintStream out) {
+        this.fixedOut = out;
+    }
+
+    private java.io.PrintStream out() {
+        return fixedOut != null ? fixedOut : System.out;
+    }
+
     private static final String DOT = "⏺";
     private static final String BRANCH = "  ⎿ "; // 结果首行的分支标记
     private static final String INDENT = "    "; // 结果后续行的对齐缩进（与首行 ⎿ 之后对齐）
@@ -50,15 +68,15 @@ public class Renderer {
 
     /** 打印启动横幅。 */
     public void banner(String version, String model, String projectDir) {
-        System.out.println("mini Claude Code " + version + "  ·  模型：" + model + "  ·  项目：" + projectDir);
-        System.out.println("输入你的需求，/help 查看命令，/exit 退出。");
-        System.out.println();
+        out().println("mini Claude Code " + version + "  ·  模型：" + model + "  ·  项目：" + projectDir);
+        out().println("输入你的需求，/help 查看命令，/exit 退出。");
+        out().println();
     }
 
     /** 打印输入提示符。 */
     public void prompt() {
-        System.out.print("> ");
-        System.out.flush();
+        out().print("> ");
+        out().flush();
     }
 
     /**
@@ -71,23 +89,84 @@ public class Renderer {
         }
         String[] lines = text.strip().split("\n", -1);
         if (lines.length == 1) {
-            System.out.println(dim(DOT + " 思考：" + lines[0]));
+            out().println(dim(DOT + " 思考：" + lines[0]));
             return;
         }
-        System.out.println(dim(DOT + " 思考"));
+        out().println(dim(DOT + " 思考"));
         for (String line : lines) {
-            System.out.println(dim(INDENT + line));
+            out().println(dim(INDENT + line));
         }
+    }
+
+    // ---- M9：流式渲染 ----
+    // 增量回调发生在 Reactor 的 IO 线程，用 synchronized 保证与主线程的输出不交错。
+    private enum StreamMode { NONE, REASONING, TEXT }
+    private StreamMode streamMode = StreamMode.NONE;
+    private boolean streamedText = false;
+
+    /** 流式思维链增量：首段打出“⏺ 思考：”标题，之后原样续写，换行处补缩进。调暗显示。 */
+    public synchronized void streamReasoning(String delta) {
+        String body = delta.replace("\n", "\n" + INDENT);
+        if (streamMode != StreamMode.REASONING) {
+            closeStreamLine();
+            body = DOT + " 思考：" + body.stripLeading();   // 标题与首段同一个颜色段输出，便于 grep/测试
+            streamMode = StreamMode.REASONING;
+        }
+        out().print(dim(body));
+        out().flush();
+    }
+
+    /** 流式正文增量：首段打出 ⏺ 标记，之后原样续写。 */
+    public synchronized void streamText(String delta) {
+        if (streamMode != StreamMode.TEXT) {
+            closeStreamLine();
+            out().print(finalMark() + " ");
+            streamMode = StreamMode.TEXT;
+            delta = delta.stripLeading();
+        }
+        streamedText = true;
+        out().print(delta.replace("\n", "\n  "));
+        out().flush();
+    }
+
+    /**
+     * 结束一次流式输出（正常结束、取消、出错都要调用），收尾换行。
+     *
+     * @return 本次是否输出过正文（调用方据此决定是否还要再渲染一遍最终答复）
+     */
+    public synchronized boolean streamEnd() {
+        boolean had = streamedText;
+        closeStreamLine();
+        streamedText = false;
+        return had;
+    }
+
+    private void closeStreamLine() {
+        if (streamMode != StreamMode.NONE) {
+            out().println();
+            streamMode = StreamMode.NONE;
+        }
+    }
+
+    /** 重试提示（M9）：只会在尚未输出任何内容时出现。 */
+    public synchronized void retrying(int attempt, long delayMs, String reason) {
+        closeStreamLine();
+        String r = reason == null ? "" : reason.strip();
+        if (r.length() > 120) {
+            r = r.substring(0, 117) + "...";
+        }
+        out().println(dim(BRANCH + "请求失败，" + String.format("%.1f", delayMs / 1000.0)
+                + "s 后进行第 " + attempt + " 次尝试：" + r));
     }
 
     /** 渲染模型在调用工具前的说明性文字（属于中间过程，调暗显示）。 */
     public void thought(String text) {
-        System.out.println(dim(DOT + " " + text.strip()));
+        out().println(dim(DOT + " " + text.strip()));
     }
 
     /** 渲染一次工具调用：⏺ 工具名(参数摘要)（中间过程，调暗显示）。 */
     public void toolUse(AssistantMessage.ToolCall call) {
-        System.out.println(dim(DOT + " " + call.name() + "(" + summarizeArgs(ToolCallHelper.arguments(call)) + ")"));
+        out().println(dim(DOT + " " + call.name() + "(" + summarizeArgs(ToolCallHelper.arguments(call)) + ")"));
     }
 
     /**
@@ -101,10 +180,10 @@ public class Renderer {
         int show = Math.min(lines.length, 6);
         for (int i = 0; i < show; i++) {
             String prefix = (i == 0) ? BRANCH : INDENT;
-            System.out.println(dim(prefix + lines[i]));
+            out().println(dim(prefix + lines[i]));
         }
         if (lines.length > show) {
-            System.out.println(dim(INDENT + "…（共 " + lines.length + " 行）"));
+            out().println(dim(INDENT + "…（共 " + lines.length + " 行）"));
         }
     }
 
@@ -120,9 +199,9 @@ public class Renderer {
         }
         for (TodoItem item : items) {
             switch (item.status()) {
-                case COMPLETED -> System.out.println(dim(INDENT + "☑ " + item.content()));
-                case IN_PROGRESS -> System.out.println(INDENT + "▶ " + bold(item.activeForm()));
-                default -> System.out.println(INDENT + "☐ " + item.content());
+                case COMPLETED -> out().println(dim(INDENT + "☑ " + item.content()));
+                case IN_PROGRESS -> out().println(INDENT + "▶ " + bold(item.activeForm()));
+                default -> out().println(INDENT + "☐ " + item.content());
             }
         }
     }
@@ -132,9 +211,9 @@ public class Renderer {
      * 上下留空行、绿色加粗标记、正文加粗，让用户一眼看出"这是给我的结果"。
      */
     public void finalAnswer(String text) {
-        System.out.println();
-        System.out.println(finalMark() + " " + bold(text == null ? "" : text.strip()));
-        System.out.println();
+        out().println();
+        out().println(finalMark() + " " + bold(text == null ? "" : text.strip()));
+        out().println();
     }
 
     /**
@@ -142,8 +221,8 @@ public class Renderer {
      * 取消不是错误：会话历史、待办、已应用改动都保留，用户可调整需求继续。
      */
     public void interrupted() {
-        System.out.println(dim(BRANCH + "Interrupted by user（已中断）"));
-        System.out.println();
+        out().println(dim(BRANCH + "Interrupted by user（已中断）"));
+        out().println();
     }
 
     /**
@@ -155,26 +234,26 @@ public class Renderer {
         if (todos != null && !todos.isEmpty()) {
             header.append(" · 待办 ").append(todos.size()).append(" 项：");
         }
-        System.out.println(dim(BRANCH + header));
+        out().println(dim(BRANCH + header));
         todoList(todos);
-        System.out.println();
+        out().println();
     }
 
     /** 渲染警告（如达到步数上限）。 */
     public void warn(String message) {
-        System.out.println("⚠ " + message);
-        System.out.println();
+        out().println("⚠ " + message);
+        out().println();
     }
 
     /** 渲染错误。 */
     public void error(String message) {
-        System.out.println("✗ " + message);
-        System.out.println();
+        out().println("✗ " + message);
+        out().println();
     }
 
     /** 打印一行普通信息（供斜杠命令使用）。 */
     public void info(String message) {
-        System.out.println(message);
+        out().println(message);
     }
 
     /**
@@ -185,7 +264,7 @@ public class Renderer {
      * 提示文字已由工具结果渲染，不走这里。）
      */
     public void planModeEntered() {
-        System.out.println("⏸ 已进入 Plan Mode：只调研与规划，不做任何修改。");
+        out().println("⏸ 已进入 Plan Mode：只调研与规划，不做任何修改。");
     }
 
     /**
@@ -193,12 +272,12 @@ public class Renderer {
      * 调暗显示，属于中间过程。记忆写入不弹审批卡片，这行提示让用户知道它确实记了。
      */
     public void memorySaved(String fileName) {
-        System.out.println(dim(DOT + " 已保存记忆：" + fileName));
+        out().println(dim(DOT + " 已保存记忆：" + fileName));
     }
 
     /** 渲染一条记忆系统的旁路提示（M5，如轮末补充提取的结果）。调暗显示。 */
     public void memoryNote(String message) {
-        System.out.println(dim(BRANCH + message));
+        out().println(dim(BRANCH + message));
     }
 
     /**
@@ -210,7 +289,7 @@ public class Renderer {
      * 写法与 M6 的 {@link #compactionStart()} 同构（⏺ 开头、调暗、属于中间过程）。
      */
     public void memoryExtractionStart() {
-        System.out.println(dim(DOT + " 正在整理记忆…"));
+        out().println(dim(DOT + " 正在整理记忆…"));
     }
 
     /**
@@ -221,7 +300,7 @@ public class Renderer {
      * 只有提取回合正常跑完才会打印；提取失败走 {@link #memoryNote(String)} 的「已跳过」分支。
      */
     public void memoryExtractionEnd() {
-        System.out.println(dim(DOT + " 本轮对话的记忆已经整理完成。"));
+        out().println(dim(DOT + " 本轮对话的记忆已经整理完成。"));
     }
 
     /**
@@ -231,19 +310,19 @@ public class Renderer {
      * 方便学员理解每一层在做什么。
      */
     public void compactionStart() {
-        System.out.println(dim(DOT + " 正在压缩上下文…"));
+        out().println(dim(DOT + " 正在压缩上下文…"));
     }
 
     /** 渲染压缩链里某一层做了什么（M6，如"Snip：清理空结果…（X → Y Token）"）。调暗显示。 */
     public void compactionNote(String message) {
-        System.out.println(dim(BRANCH + message));
+        out().println(dim(BRANCH + message));
     }
 
     /** 渲染压缩前后的总 Token 变化（M6，如"压缩后：182k → 96k Token（估算）"）。 */
     public void compactionSummary(int beforeTokens, int afterTokens) {
-        System.out.println(dim(BRANCH + "压缩后：" + formatTokens(beforeTokens)
+        out().println(dim(BRANCH + "压缩后：" + formatTokens(beforeTokens)
                 + " → " + formatTokens(afterTokens) + " Token（估算）"));
-        System.out.println();
+        out().println();
     }
 
     /** 把 Token 数格式化成带 k 的紧凑形式（如 18234 → 18.2k），小于 1000 直接显示。 */

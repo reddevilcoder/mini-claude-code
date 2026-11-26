@@ -5,6 +5,7 @@ import com.minicc.config.MccConfig;
 import com.minicc.context.MemoryStage;
 import com.minicc.context.SystemPrompt;
 import com.minicc.compact.TokenEstimator;
+import com.minicc.model.UsageTracker;
 import com.minicc.session.Session;
 import com.minicc.tool.Tool;
 import com.minicc.tool.ToolRegistry;
@@ -36,9 +37,11 @@ public final class ContextCommand implements SlashCommand {
     private final MccConfig config;
     private final ToolRegistry registry;
     private final MemoryStage memoryStage;
+    private final UsageTracker usage;   // M9：最近一次请求的真实 prompt Token
 
     public ContextCommand(Session session, Renderer renderer, MccConfig config,
-                          ToolRegistry registry, MemoryStage memoryStage) {
+                          ToolRegistry registry, MemoryStage memoryStage, UsageTracker usage) {
+        this.usage = usage;
         this.session = session;
         this.renderer = renderer;
         this.config = config;
@@ -72,6 +75,10 @@ public final class ContextCommand implements SlashCommand {
         renderer.info("  项目约定与记忆索引       " + Renderer.formatTokens(memory)
                 + "   （AGENT.md + 记忆说明 + MEMORY.md）");
         renderer.info("  会话历史（含待办/工具结果） " + Renderer.formatTokens(history));
+        // M9：估算值之外，给出服务端报告的真实值（上一次请求的 prompt Token，不含本次之后新增的内容）。
+        if (usage != null && usage.lastPromptTokens() >= 0) {
+            renderer.info("  上次请求实际输入（服务端） " + Renderer.formatTokens((int) usage.lastPromptTokens()));
+        }
         return false;
     }
 

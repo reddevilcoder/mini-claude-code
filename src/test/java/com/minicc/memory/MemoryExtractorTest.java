@@ -121,7 +121,7 @@ class MemoryExtractorTest {
 
         @Override
         public Flux<ChatResponse> stream(Prompt prompt) {
-            throw new UnsupportedOperationException("测试不使用流式接口");
+            return Flux.just(call(prompt)); // M9：整条消息作为单个分片
         }
     }
 }

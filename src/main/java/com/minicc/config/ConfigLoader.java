@@ -66,7 +66,7 @@ public final class ConfigLoader {
         String baseUrl = firstNonBlank(System.getenv("OPENAI_BASE_URL"), s.baseUrl);
 
         return new MccConfig(s.model, s.maxSteps, s.contextLimit, apiKey, baseUrl,
-                s.sandbox, s.bashTimeoutMs, s.stateDir, s.compact, s.toolResultBudget, s.skills);
+                s.sandbox, s.bashTimeoutMs, s.stateDir, s.compact, s.toolResultBudget, s.skills, s.modelSettings);
     }
 
     /** 全局配置路径：~/.mcc/mcc.yml。 */
@@ -139,6 +139,8 @@ public final class ConfigLoader {
                 s.toolResultBudget = asToolResultBudget(yaml.get("toolResultBudget"), s.toolResultBudget);
                 // M7：skills（开关 + 清单预算），缺省回落默认值。
                 s.skills = asSkills(yaml.get("skills"), s.skills);
+                // M9：流式开关、重试策略与计价表。
+                s.modelSettings = asModelSettings(yaml, s.modelSettings);
             }
         } catch (Exception e) {
             // 配置文件读取失败不致命，保留累加器当前值并提示；前面已成功赋值的字段不会回滚。
@@ -158,6 +160,52 @@ public final class ConfigLoader {
         MccConfig.CompactSettings compact = MccConfig.DEFAULT_COMPACT;      // M6
         Map<String, Integer> toolResultBudget = MccConfig.DEFAULT_TOOL_RESULT_BUDGET;  // M6
         MccConfig.SkillSettings skills = MccConfig.DEFAULT_SKILLS;          // M7
+        MccConfig.ModelSettings modelSettings = MccConfig.DEFAULT_MODEL_SETTINGS; // M9
+    }
+
+    /**
+     * M9：读取顶层的 {@code stream}、{@code retry} 段与 {@code pricing} 段。
+     * pricing 按“模型名 → {input, output, cacheRead}”合并：项目级只覆盖它写到的模型。
+     */
+    @SuppressWarnings("unchecked")
+    private static MccConfig.ModelSettings asModelSettings(Map<String, Object> yaml, MccConfig.ModelSettings base) {
+        boolean stream = asBool(yaml.get("stream"), base.stream());
+        int attempts = base.retryMaxAttempts();
+        long backoff = base.retryInitialBackoffMs();
+        if (yaml.get("retry") instanceof Map<?, ?> r) {
+            attempts = Math.max(1, asInt(r.get("maxAttempts"), attempts));
+            backoff = Math.max(0, asLong(r.get("initialBackoffMs"), backoff));
+        }
+        Map<String, MccConfig.Price> pricing = new java.util.LinkedHashMap<>(base.pricing());
+        if (yaml.get("pricing") instanceof Map<?, ?> p) {
+            for (Map.Entry<?, ?> e : p.entrySet()) {
+                if (!(e.getValue() instanceof Map<?, ?> m)) {
+                    continue;
+                }
+                Double in = asDoubleOrNull(m.get("input"));
+                Double out = asDoubleOrNull(m.get("output"));
+                if (in == null || out == null) {
+                    System.err.println("pricing." + e.getKey() + " 缺少 input/output，已忽略");
+                    continue;
+                }
+                pricing.put(String.valueOf(e.getKey()), new MccConfig.Price(in, out, asDoubleOrNull(m.get("cacheRead"))));
+            }
+        }
+        return new MccConfig.ModelSettings(stream, attempts, backoff, Map.copyOf(pricing));
+    }
+
+    private static Double asDoubleOrNull(Object v) {
+        if (v instanceof Number n) {
+            return n.doubleValue();
+        }
+        if (v instanceof String str) {
+            try {
+                return Double.parseDouble(str.trim());
+            } catch (NumberFormatException e) {
+                return null;
+            }
+        }
+        return null;
     }
 
     /**
