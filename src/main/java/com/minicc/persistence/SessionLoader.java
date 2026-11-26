@@ -45,13 +45,19 @@ public class SessionLoader {
      * </ol>
      */
     public Result restore(Session session, String sessionId, SessionStore store, TodoSnapshotStore todoStore) {
+        return restore(session, sessionId, store, todoStore, null);
+    }
+
+    /** M10：连同该会话的检查点目录一起恢复（恢复后仍可 /rewind 之前的轮次）。REWIND 事件已在 readAll 里应用。 */
+    public Result restore(Session session, String sessionId, SessionStore store, TodoSnapshotStore todoStore,
+                          com.minicc.checkpoint.CheckpointStore checkpoints) {
         List<Message> messages = dropDanglingToolCalls(store.readAll());
         if (messages.isEmpty()) {
             return new Result(0, List.of());
         }
 
         session.clear();                                        // 清空当前会话内存（历史/待办/会话级放行）
-        session.attachPersistence(sessionId, store, todoStore); // 续写同一文件：后续新消息追加到被恢复的日志
+        session.attachPersistence(sessionId, store, todoStore, checkpoints); // 续写同一文件：后续新消息追加到被恢复的日志
         for (Message message : messages) {
             session.replay(message);                            // 只改内存、不写 sink
         }

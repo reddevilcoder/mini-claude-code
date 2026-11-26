@@ -54,6 +54,7 @@ public final class ClearCommand implements SlashCommand {
         Path root = session.workingDir();
         SessionStore store = new SessionStore(paths.sessionLog(root, id));
         TodoSnapshotStore todoStore = new TodoSnapshotStore(paths.todoSnapshot(root, id));
-        session.attachPersistence(id, store, todoStore);
+        session.attachPersistence(id, store, todoStore,
+                new com.minicc.checkpoint.CheckpointStore(paths.checkpointDir(root, id)));   // M10
     }
 }

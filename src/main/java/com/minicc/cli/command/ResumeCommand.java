@@ -63,7 +63,8 @@ public final class ResumeCommand implements SlashCommand {
         SessionStore store = new SessionStore(paths.sessionLog(projectRoot, id));
         TodoSnapshotStore todoStore = new TodoSnapshotStore(paths.todoSnapshot(projectRoot, id));
 
-        SessionLoader.Result result = loader.restore(session, id, store, todoStore);
+        SessionLoader.Result result = loader.restore(session, id, store, todoStore,
+                new com.minicc.checkpoint.CheckpointStore(paths.checkpointDir(projectRoot, id)));   // M10
         if (result.messageCount() == 0) {
             renderer.info("没有可恢复的会话。");
             return false;

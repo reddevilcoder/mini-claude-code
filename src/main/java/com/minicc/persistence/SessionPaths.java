@@ -41,6 +41,11 @@ public final class SessionPaths {
         return projectDir(projectRoot).resolve(sessionId + LOG_SUFFIX);
     }
 
+    /** M10：某次会话的文件检查点目录：{@code <projectDir>/checkpoints/<sessionId>/}。 */
+    public Path checkpointDir(Path projectRoot, String sessionId) {
+        return projectDir(projectRoot).resolve("checkpoints").resolve(sessionId);
+    }
+
     /** 某次会话的待办快照文件：{@code <projectDir>/<sessionId>.todos.json}。 */
     public Path todoSnapshot(Path projectRoot, String sessionId) {
         return projectDir(projectRoot).resolve(sessionId + TODO_SUFFIX);

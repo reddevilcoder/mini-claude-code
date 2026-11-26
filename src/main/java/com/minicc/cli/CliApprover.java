@@ -1,6 +1,7 @@
 package com.minicc.cli;
 
 import com.minicc.agent.CancelToken;
+import com.minicc.diff.UnifiedDiff;
 import com.minicc.permission.Approval;
 import com.minicc.permission.Approver;
 import com.minicc.tool.Tool;
@@ -35,7 +36,7 @@ public class CliApprover implements Approver {
     @Override
     public Approval requestApproval(AssistantMessage.ToolCall call, Tool tool, ToolContext ctx) {
         List<String> options = List.of("允许", sessionOptionLabel(tool, call, ctx), "拒绝，并说明原因");
-        int idx = prompter.select(buildPreview(call, tool), buildTitle(call, tool), options);
+        int idx = prompter.select(buildPreview(call, tool, ctx), buildTitle(call, tool), options);
 
         if (idx < 0) {                 // Ctrl-C / Ctrl-D：取消整个任务
             cancelToken.cancel();
@@ -84,7 +85,20 @@ public class CliApprover implements Approver {
     }
 
     /** 卡片预览：改文件给出 diff 片段，Bash 给出将执行的命令。 */
-    private static List<String> buildPreview(AssistantMessage.ToolCall call, Tool tool) {
+    /** M10：diff 预览最多展示的行数，超出折叠（卡片不能刷屏）。 */
+    static final int MAX_DIFF_LINES = 40;
+
+    private static List<String> buildPreview(AssistantMessage.ToolCall call, Tool tool, ToolContext ctx) {
+        // M10：工具能算出“改成什么样”就展示真实 unified diff，而不是只回显参数。
+        Tool.FilePreview fp = null;
+        try {
+            fp = tool.preview(call, ctx);
+        } catch (RuntimeException ignore) {
+            // 预览失败不影响审批：回落为参数摘要。
+        }
+        if (fp != null) {
+            return diffPreview(fp);
+        }
         String name = tool.name();
         switch (name) {
             case "Edit": {
@@ -118,6 +132,20 @@ public class CliApprover implements Approver {
             default:
                 return List.of();
         }
+    }
+
+    static List<String> diffPreview(Tool.FilePreview fp) {
+        List<String> lines = new ArrayList<>();
+        int[] stat = UnifiedDiff.stat(fp.before(), fp.after());
+        lines.add((fp.before() == null ? "新建 " : "修改 ") + fp.path() + "（+" + stat[0] + " -" + stat[1] + "）");
+        List<String> diff = UnifiedDiff.diff(fp.before(), fp.after(), 3);
+        for (int i = 0; i < Math.min(diff.size(), MAX_DIFF_LINES); i++) {
+            lines.add(diff.get(i));
+        }
+        if (diff.size() > MAX_DIFF_LINES) {
+            lines.add("…（diff 共 " + diff.size() + " 行，已折叠）");
+        }
+        return lines;
     }
 
     /** 取路径最后一段作为显示名，路径为空时原样返回。 */

@@ -69,3 +69,35 @@ Claude Code 里面有不少 harness 上的工程做法，学习价值很高。�
 ## **这门课适合谁，怎么学**
 
 这门课适合已经读过我们另外两门前置课的同学，也就是《大模型应用开发基础》和《大模型应用开发进阶》。
+## **产品化增强（M0 / M9）**
+
+**Headless 模式与 Eval（M0）**
+
+```bash
+mcc -p "修复 pricing.py 的 off-by-one" -d ./proj --output json --permission auto
+python3 evals/run_evals.py --label baseline --repeat 3   # 需 OPENAI_API_KEY，会产生费用
+```
+
+- `--output json` 输出 `status / result / steps / tool_calls / usage{prompt_tokens, completion_tokens, cost_usd}`；退出码 0 完成、2 步数上限、130 取消、1 出错。
+- `--permission auto` 在开启沙箱时为严格模式：沙箱不可用直接拒绝执行（fail closed），不会回落到裸跑。
+
+**流式、取消、重试与成本（M9）**
+
+- 流式输出：思维链与正文逐字上屏；增量只用于展示，流结束聚合成一条完整消息后才写入会话。
+- 即时取消：Ctrl-C 通过 `CancelToken.onCancel` 回调直接断开 HTTP 流，半截消息不进历史。
+- 重试：仅对 408/409/429/5xx/网络错误，指数退避 + 抖动，且**只在尚未输出任何内容时**重试；SDK 自带重试已关闭。
+- 成本：`/cost` 展示真实 usage 与按配置单价折算的费用；`/context` 额外显示上次请求服务端报告的真实输入 Token。
+
+```yaml
+stream: true
+retry: { maxAttempts: 3, initialBackoffMs: 1000 }
+pricing:
+  deepseek-flash: { input: 0.27, output: 1.10, cacheRead: 0.07 }   # 美元/百万 Token，以官网为准
+```
+
+**检查点、diff 预览与回退（M10）**
+
+- 每轮用户输入带 `turnId`（写入 JSONL）；Edit/Write 在真正写盘前把原文件备份到 `~/.mcc/.../checkpoints/<sessionId>/<turnId>/`，写后记录哈希。
+- 审批卡片展示统一 diff（`Tool.preview()` 先算出改动，再决定是否写入）。
+- `/rewind`：选择某一轮，回退「文件 + 对话 / 仅对话 / 仅文件」。对话回退以 JSONL 为准并追加 `REWIND` 事件（不改写日志，压缩后依然正确，`/resume` 也能正确重放）；文件回退检测外部修改冲突，可跳过或强制覆盖。
+- 局限：Bash 的副作用无法撤销，回退前会列出这些轮次执行过的命令作为提醒。

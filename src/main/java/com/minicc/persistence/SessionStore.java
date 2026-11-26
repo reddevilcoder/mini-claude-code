@@ -67,6 +67,12 @@ public class SessionStore {
      */
     public static final String REASONING_CONTENT = "reasoningContent";
 
+    /** M10：用户消息 metadata 里的轮次 ID 键（一条用户输入 = 一轮 = 一个检查点）。 */
+    public static final String TURN_ID = "turnId";
+
+    /** M10：回退事件的 messageType。不是消息，是“从某轮起之前的记录作废”的标记。 */
+    static final String REWIND = "REWIND";
+
     private static final TypeReference<List<AssistantMessage.ToolCall>> TOOL_CALLS =
             new TypeReference<>() {
             };
@@ -131,7 +137,12 @@ public class SessionStore {
                     continue;
                 }
                 try {
-                    messages.add(json.readValue(line, Message.class));
+                    JsonNode node = json.readTree(line);
+                    if (REWIND.equals(node.path("messageType").asText())) {
+                        truncateBeforeTurn(messages, node.path(TURN_ID).asText());
+                        continue;
+                    }
+                    messages.add(json.treeToValue(node, Message.class));
                 } catch (Exception lineError) {
                     System.err.println("跳过损坏的会话日志行：" + lineError.getMessage());
                 }
@@ -140,6 +151,37 @@ public class SessionStore {
             System.err.println("读取会话日志失败：" + e.getMessage());
         }
         return messages;
+    }
+
+    /**
+     * M10：追加一条回退事件——读回时，{@code turnId} 那条用户消息及其之后的记录全部作废。
+     *
+     * <p><b>面试关注：为什么追加事件而不是改写 JSONL？</b>
+     * 日志是 append-only 的事件流：改写文件既有崩溃时写坏整份日志的风险，也会丢掉“曾经发生过什么”的审计信息。
+     * 追加一行 REWIND，读回（{@link #readAll}）时按事件重放即可得到回退后的视图，
+     * 和数据库的 WAL / 事件溯源是同一个思路。
+     */
+    public synchronized void appendRewind(String turnId) {
+        if (logFile == null) {
+            return;
+        }
+        try {
+            Files.createDirectories(logFile.getParent());
+            String line = json.writeValueAsString(Map.of("messageType", REWIND, TURN_ID, turnId)) + "\n";
+            Files.writeString(logFile, line, CREATE, APPEND);
+        } catch (IOException | RuntimeException e) {
+            System.err.println("写入回退事件失败：" + e.getMessage());
+        }
+    }
+
+    /** 把 messages 截断到 turnId 那条用户消息之前；找不到则不动（损坏或跨会话的事件不应清空历史）。 */
+    public static void truncateBeforeTurn(List<Message> messages, String turnId) {
+        for (int i = 0; i < messages.size(); i++) {
+            if (messages.get(i) instanceof UserMessage u && turnId.equals(u.getMetadata().get(TURN_ID))) {
+                messages.subList(i, messages.size()).clear();
+                return;
+            }
+        }
     }
 
     /** 本存储对应的日志文件；未绑定文件时为 null。 */
@@ -168,6 +210,10 @@ public class SessionStore {
             gen.writeStringField("messageType", message.getMessageType().name());
             if (message instanceof UserMessage user) {
                 gen.writeStringField("text", user.getText());
+                Object turnId = user.getMetadata().get(TURN_ID);
+                if (turnId instanceof String id) {
+                    gen.writeStringField(TURN_ID, id);   // M10：轮次 ID，/rewind 用它定位回退点
+                }
             } else if (message instanceof AssistantMessage assistant) {
                 writeText(gen, assistant.getText());
                 Object reasoning = assistant.getMetadata().get(REASONING_CONTENT);
@@ -211,7 +257,10 @@ public class SessionStore {
                 if (text == null || text.isNull()) {
                     throw context.weirdStringException("", UserMessage.class, "用户消息缺少 text");
                 }
-                return new UserMessage(text.asText());
+                JsonNode turnId = node.get(TURN_ID);
+                return UserMessage.builder().text(text.asText())
+                        .metadata(turnId == null || turnId.isNull() ? Map.of() : Map.of(TURN_ID, turnId.asText()))
+                        .build();
             }
             if (MessageType.ASSISTANT.name().equals(type)) {
                 JsonNode text = node.get("text");

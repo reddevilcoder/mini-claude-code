@@ -73,6 +73,25 @@ public class WriteTool implements Tool {
         return false; // 改文件，必须串行
     }
 
+    /** M10：预览——新内容就是 content，原内容读自磁盘（不存在则为新建）。 */
+    @Override
+    public FilePreview preview(AssistantMessage.ToolCall call, ToolContext ctx) {
+        String filePath = ToolCallHelper.getString(call, "file_path", "").trim();
+        if (filePath.isEmpty()) {
+            return null;
+        }
+        Path path = Path.of(filePath);
+        if (!path.isAbsolute() || Files.isDirectory(path)) {
+            return null;
+        }
+        try {
+            String before = Files.isRegularFile(path) ? Files.readString(path, StandardCharsets.UTF_8) : null;
+            return new FilePreview(path, before, ToolCallHelper.getString(call, "content", ""));
+        } catch (IOException | RuntimeException e) {
+            return null;   // 非 UTF-8 等情况：回落为参数摘要
+        }
+    }
+
     @Override
     public ToolResult execute(AssistantMessage.ToolCall call, ToolContext ctx) {
         String filePath = ToolCallHelper.getString(call, "file_path", "").trim();
@@ -99,7 +118,10 @@ public class WriteTool implements Tool {
             if (path.getParent() != null) {
                 Files.createDirectories(path.getParent()); // 父目录不存在则自动创建
             }
+            // M10：紧挨着写入之前备份（新建文件只记“原本不存在”，回退时删除）；备份失败则不写。
+            ctx.checkpoint().before(path);
             Files.writeString(path, content, StandardCharsets.UTF_8);
+            ctx.checkpoint().after(path);
             // 写入后视为"已读"，便于随后继续用 Edit 修改它。
             ctx.workspace().markRead(path);
 

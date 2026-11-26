@@ -64,6 +64,20 @@ public interface Tool {
      *
      * @return 字符阈值；返回 {@code -1} 表示无限大、永不落盘
      */
+    /**
+     * M10：执行前预览——不写盘，算出“这次调用会把哪个文件从什么内容改成什么内容”，供审批卡片展示 diff。
+     *
+     * <p>计算与写入分离：预览和执行走同一段计算逻辑，卡片上看到的就是将要写入的内容。
+     * 参数非法、文件不可读等情况返回 null，卡片回落为参数摘要（真正的错误由 execute 报告）。
+     */
+    default FilePreview preview(AssistantMessage.ToolCall call, ToolContext ctx) {
+        return null;
+    }
+
+    /** 一次写操作的预览：before 为 null 表示新建文件。 */
+    record FilePreview(java.nio.file.Path path, String before, String after) {
+    }
+
     default int maxResultChars() {
         return 50_000;
     }

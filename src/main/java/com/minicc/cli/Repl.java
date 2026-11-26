@@ -1,10 +1,14 @@
 package com.minicc.cli;
 
+import com.minicc.model.UsageTracker;
+
 import com.minicc.agent.AgentLoop;
 import com.minicc.agent.CancelToken;
 import com.minicc.cli.command.ClearCommand;
 import com.minicc.cli.command.CompactCommand;
 import com.minicc.cli.command.ContextCommand;
+import com.minicc.cli.command.CostCommand;
+import com.minicc.cli.command.RewindCommand;
 import com.minicc.cli.command.ExitCommand;
 import com.minicc.cli.command.HelpCommand;
 import com.minicc.cli.command.MemoryCommand;
@@ -71,6 +75,7 @@ public class Repl {
     private final MemoryStage memoryStage;             // M6：/context 估算记忆段占用
     private final List<Skill> skills;                  // M7：/skills 列出当前可用技能
     private final boolean skillsEnabled;               // M7：Skills 是否启用（关闭时 /skills 作提示）
+    private final UsageTracker usage;                  // M9：/cost 与 /context 的真实用量
 
     // 斜杠命令表，保留注册顺序供 /help 展示。
     private final Map<String, SlashCommand> commands = new LinkedHashMap<>();
@@ -80,7 +85,7 @@ public class Repl {
                 SessionPaths paths, CardPrompter prompter, Path stateDir, AutoMemory autoMemory,
                 String version, String model,
                 MccConfig config, CompactionManager compactionManager, MemoryStage memoryStage,
-                List<Skill> skills, boolean skillsEnabled) {
+                List<Skill> skills, boolean skillsEnabled, UsageTracker usage) {
         this.agentLoop = agentLoop;
         this.session = session;
         this.registry = registry;
@@ -98,6 +103,7 @@ public class Repl {
         this.memoryStage = memoryStage;
         this.skills = skills;
         this.skillsEnabled = skillsEnabled;
+        this.usage = usage;
         registerCommands();
     }
 
@@ -177,13 +183,15 @@ public class Repl {
         add(new HelpCommand(commands.values(), renderer));
         add(new ToolsCommand(registry, renderer));
         add(new SkillsCommand(skills, skillsEnabled, renderer));                     // M7：列出技能
-        add(new ContextCommand(session, renderer, config, registry, memoryStage));  // M6：占用分布
+        add(new ContextCommand(session, renderer, config, registry, memoryStage, usage)); // M6：占用分布
+        add(new CostCommand(usage, config, renderer));                              // M9：用量与费用
         add(new ClearCommand(session, paths, renderer));
         add(new ResumeCommand(session, paths, renderer));
         add(new ExitCommand(renderer));
         add(new MemoryCommand(session.workingDir(), stateDir, autoMemory, prompter, renderer)); // M5
         add(new CompactCommand(renderer, session, compactionManager));              // M6：手动压缩
         add(new PlanCommand(session, renderer));                                    // M8：进入 Plan Mode
+        add(new RewindCommand(session, prompter, renderer));                        // M10：回退
     }
 
     private void add(SlashCommand command) {

@@ -77,11 +77,21 @@ public class EditTool implements Tool {
         return false; // 改文件，必须串行执行
     }
 
-    @Override
-    public ToolResult execute(AssistantMessage.ToolCall call, ToolContext ctx) {
+    /** 一次编辑的计算结果：要么是错误，要么是“原内容 → 新内容”。 */
+    private record Planned(ToolResult error, Path path, String filePath, String before, String updated,
+                           int occurrences, boolean replaceAll, String oldString, String newString) {
+        static Planned fail(String message) {
+            return new Planned(ToolResult.error(message), null, null, null, null, 0, false, null, null);
+        }
+    }
+
+    /**
+     * 校验参数并算出新内容（M10：预览与执行共用，不写盘）。
+     */
+    private Planned plan(AssistantMessage.ToolCall call, ToolContext ctx) {
         String filePath = ToolCallHelper.getString(call, "file_path", "").trim();
         if (filePath.isEmpty()) {
-            return ToolResult.error("缺少必填参数 file_path。");
+            return Planned.fail("缺少必填参数 file_path。");
         }
         String oldString = ToolCallHelper.getString(call, "old_string", "");
         String newString = ToolCallHelper.getString(call, "new_string", "");
@@ -89,50 +99,69 @@ public class EditTool implements Tool {
 
         Path path = Path.of(filePath);
         if (!path.isAbsolute()) {
-            return ToolResult.error("file_path 必须是绝对路径，收到的是相对路径：" + filePath);
+            return Planned.fail("file_path 必须是绝对路径，收到的是相对路径：" + filePath);
         }
         if (!Files.exists(path)) {
-            return ToolResult.error("文件不存在：" + filePath + "。新建文件请用 Write 工具。");
+            return Planned.fail("文件不存在：" + filePath + "。新建文件请用 Write 工具。");
         }
         if (Files.isDirectory(path)) {
-            return ToolResult.error("这是一个目录，不是文件：" + filePath);
+            return Planned.fail("这是一个目录，不是文件：" + filePath);
         }
         // 改前先读校验：逼模型基于真实内容构造修改。
         if (!ctx.workspace().hasRead(path)) {
-            return ToolResult.error("修改前请先用 Read 读取该文件：" + filePath);
+            return Planned.fail("修改前请先用 Read 读取该文件：" + filePath);
         }
         if (oldString.isEmpty()) {
-            return ToolResult.error("old_string 不能为空；新建文件请用 Write。");
+            return Planned.fail("old_string 不能为空；新建文件请用 Write。");
         }
         if (oldString.equals(newString)) {
-            return ToolResult.error("old_string 与 new_string 相同，无需修改。");
+            return Planned.fail("old_string 与 new_string 相同，无需修改。");
         }
-
+        String content;
         try {
-            String content = Files.readString(path, StandardCharsets.UTF_8);
+            content = Files.readString(path, StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            return Planned.fail("修改文件失败：" + e.getMessage());
+        }
+        int occurrences = countOccurrences(content, oldString);
+        if (occurrences == 0) {
+            return Planned.fail("未在文件中找到 old_string。请对照 Read 的输出，确认内容与缩进完全一致。");
+        }
+        if (occurrences > 1 && !replaceAll) {
+            return Planned.fail("old_string 在文件中出现了 " + occurrences
+                    + " 次，不唯一。请补充更多上下文使其唯一，或将 replace_all 设为 true 以全部替换。");
+        }
+        // 把 old_string 当字面量替换（不是正则）。replace_all 决定替换一次还是全部。
+        String updated = replaceAll
+                ? replaceLiteralAll(content, oldString, newString)
+                : replaceLiteralFirst(content, oldString, newString);
+        return new Planned(null, path, filePath, content, updated, occurrences, replaceAll, oldString, newString);
+    }
 
-            int occurrences = countOccurrences(content, oldString);
-            if (occurrences == 0) {
-                return ToolResult.error("未在文件中找到 old_string。请对照 Read 的输出，确认内容与缩进完全一致。");
-            }
-            if (occurrences > 1 && !replaceAll) {
-                return ToolResult.error("old_string 在文件中出现了 " + occurrences
-                        + " 次，不唯一。请补充更多上下文使其唯一，或将 replace_all 设为 true 以全部替换。");
-            }
+    @Override
+    public FilePreview preview(AssistantMessage.ToolCall call, ToolContext ctx) {
+        Planned p = plan(call, ctx);
+        return p.error() != null ? null : new FilePreview(p.path(), p.before(), p.updated());
+    }
 
-            // 把 old_string 当字面量替换（不是正则）。replace_all 决定替换一次还是全部。
-            String updated = replaceAll
-                    ? replaceLiteralAll(content, oldString, newString)
-                    : replaceLiteralFirst(content, oldString, newString);
-
+    @Override
+    public ToolResult execute(AssistantMessage.ToolCall call, ToolContext ctx) {
+        Planned p = plan(call, ctx);
+        if (p.error() != null) {
+            return p.error();
+        }
+        try {
+            // M10：紧挨着写入之前备份；备份失败则不写（没有备份的改动无法回退）。
+            ctx.checkpoint().before(p.path());
             // 整文件写回，不是文件系统层面的局部 patch；此处失败或进程崩溃时不能承诺原内容完整保留。
-            Files.writeString(path, updated, StandardCharsets.UTF_8);
+            Files.writeString(p.path(), p.updated(), StandardCharsets.UTF_8);
+            ctx.checkpoint().after(p.path());
 
-            int removed = lineCount(oldString) * (replaceAll ? occurrences : 1);
-            int added = lineCount(newString) * (replaceAll ? occurrences : 1);
-            String summary = "已修改 " + filePath + "（替换 "
-                    + (replaceAll ? occurrences : 1) + " 处，+" + added + " -" + removed + " 行）";
-            return ToolResult.ok(summary + "\n" + snippet(updated, newString));
+            int n = p.replaceAll() ? p.occurrences() : 1;
+            int removed = lineCount(p.oldString()) * n;
+            int added = lineCount(p.newString()) * n;
+            String summary = "已修改 " + p.filePath() + "（替换 " + n + " 处，+" + added + " -" + removed + " 行）";
+            return ToolResult.ok(summary + "\n" + snippet(p.updated(), p.newString()));
         } catch (IOException e) {
             return ToolResult.error("修改文件失败：" + e.getMessage());
         }

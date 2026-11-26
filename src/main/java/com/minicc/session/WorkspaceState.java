@@ -24,7 +24,7 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * <p>路径的 normalize 只消去 {@code .}/{@code ..} 等语法差异，不解析符号链接，
  * 不同路径仍可能指向同一文件；这个集合既不是文件身份的完整索引，也不是文件访问权限边界。
- * 此外 Session.clear() 目前不清空该集合，实际生命周期跟随 Session 对象。
+ * M10 起 {@code /clear} 会清空该集合；{@code /rewind} 还原文件后会撤销被还原文件的已读标记，逼模型重新读取。
  */
 public class WorkspaceState {
 
@@ -38,6 +38,16 @@ public class WorkspaceState {
     /** 这个文件本会话是否被 Read 过。 */
     public boolean hasRead(Path file) {
         return readFiles.contains(normalize(file));
+    }
+
+    /** 清空全部已读标记（/clear）。 */
+    public void clear() {
+        readFiles.clear();
+    }
+
+    /** 撤销某个文件的已读标记（/rewind 还原文件后，模型记忆中的内容已过期）。 */
+    public void forget(Path file) {
+        readFiles.remove(normalize(file));
     }
 
     private static Path normalize(Path file) {

@@ -53,6 +53,7 @@ import java.nio.file.Path;
  * @param planMode        计划态开关（M8，Session 持有，这里下发给 PlanModeHook）
  * @param memoryDir       本项目的记忆目录（M5；为空表示未启用记忆）
  * @param memoryWritesOnly 是否为「仅限记忆目录写入」的提取回合（M5）
+ * @param checkpoint      文件检查点（M10）：Edit/Write 写盘前备份、写盘后记录哈希
  */
 public record ToolContext(
         Path workingDir,
@@ -64,7 +65,23 @@ public record ToolContext(
         PermissionState permissions,
         PlanModeState planMode,
         Path memoryDir,
-        boolean memoryWritesOnly) {
+        boolean memoryWritesOnly,
+        com.minicc.checkpoint.FileCheckpoint checkpoint) {
+
+    /** 规范构造器：checkpoint 为 null 时视为不做检查点。 */
+    public ToolContext {
+        if (checkpoint == null) {
+            checkpoint = com.minicc.checkpoint.FileCheckpoint.NONE;
+        }
+    }
+
+    /** M8 的 10 参签名：不带检查点。 */
+    public ToolContext(Path workingDir, WorkspaceState workspace, TodoList todos,
+                       boolean sandbox, long bashTimeoutMs, CancelToken cancelToken,
+                       PermissionState permissions, PlanModeState planMode, Path memoryDir, boolean memoryWritesOnly) {
+        this(workingDir, workspace, todos, sandbox, bashTimeoutMs, cancelToken, permissions, planMode,
+                memoryDir, memoryWritesOnly, null);
+    }
 
     /**
      * 兼容旧签名（无记忆目录、无计划态）：M1–M4 的调用点与单元测试继续用这个 7 参构造，
@@ -92,7 +109,7 @@ public record ToolContext(
     /** 在既有上下文上挂一个记忆目录（M5；审批钩子据此自动放行记忆写入）。透传计划态。 */
     public ToolContext withMemoryDir(Path memoryDir) {
         return new ToolContext(workingDir, workspace, todos, sandbox, bashTimeoutMs,
-                cancelToken, permissions, planMode, memoryDir, false);
+                cancelToken, permissions, planMode, memoryDir, false, checkpoint);
     }
 
     /**
@@ -101,6 +118,6 @@ public record ToolContext(
      */
     public ToolContext memoryOnlyWrites(Path memoryDir, WorkspaceState freshWorkspace) {
         return new ToolContext(workingDir, freshWorkspace, todos, sandbox, bashTimeoutMs,
-                cancelToken, permissions, planMode, memoryDir, true);
+                cancelToken, permissions, planMode, memoryDir, true, null);
     }
 }

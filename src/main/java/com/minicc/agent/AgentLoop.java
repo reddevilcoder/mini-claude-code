@@ -5,7 +5,10 @@ import com.minicc.config.MccConfig;
 import com.minicc.compact.CompactionManager;
 import com.minicc.context.ContextAssembler;
 import com.minicc.memory.MemoryExtractor;
+import com.minicc.checkpoint.FileCheckpoint;
+import com.minicc.model.ModelCancelledException;
 import com.minicc.model.ModelClient;
+import com.minicc.model.StreamListener;
 import com.minicc.persistence.SessionStore;
 import com.minicc.session.Session;
 import com.minicc.tool.ToolCallHelper;
@@ -103,7 +106,7 @@ public class AgentLoop {
     }
 
     /** 处理用户的一条输入：驱动循环直到给出最终答复或触发边界。 */
-    public void run(Session session) {
+    public RunResult run(Session session) {
         // 工具执行上下文：M2 带上工作区状态（改前先读）、待办清单、沙箱与超时配置；
         // M3 再带上取消信号与会话级放行状态（后者由 Session 持有、这里下发给审批钩子）；
         // M8 再带上会话级计划态（由 Session 持有、这里下发给 PlanModeHook，计划态下拦住写操作）。
@@ -117,8 +120,13 @@ public class AgentLoop {
                 session.permissions(),
                 session.planMode(),   // M8：计划态开关，PlanModeHook 据此拦住写操作
                 memoryDir,            // M5：记忆目录，审批钩子据此自动放行记忆写入
-                false);
+                false,
+                // M10：本轮的文件检查点（记忆目录的写入不纳入回退）
+                FileCheckpoint.of(session.checkpoints(), session.currentTurnId(), memoryDir));
+        session.checkpoints().registerTurn(session.currentTurnId());
         int step = 0;
+        int toolCalls = 0;   // M0：结构化结果统计
+        int toolErrors = 0;
 
         // M5：本轮开始时的历史位置（含刚追加的用户消息），用于收尾时截取「本轮对话」交给提取。
         int turnStart = Math.max(0, session.history().size() - 1);
@@ -129,26 +137,41 @@ public class AgentLoop {
             // 检查点①：循环顶部查取消信号（Ctrl-C）。命中则安全停下、保留会话状态。
             if (isCancelled()) {
                 renderer.interrupted();
-                return;
+                return new RunResult(RunResult.Status.CANCELLED, null, step, toolCalls, toolErrors);
             }
 
             // 边界控制：超过最大步数就停下，防止无限循环。
             if (step++ >= config.maxSteps()) {
                 renderer.warn("已达到最大步数上限（" + config.maxSteps() + "），停止本轮任务。");
-                return;
+                return new RunResult(RunResult.Status.MAX_STEPS, null, step - 1, toolCalls, toolErrors);
             }
 
             // 1) 拼好本次上下文，请求模型，再把这一轮原样写回会话。
             //    要派发的工具调用就是这条助手消息上的 AssistantMessage.ToolCall。
             AssistantMessage assistantMessage;
+            boolean streamed = config.stream();
             try {
                 // 每一步重新组装，而不是只在用户输入时组装：工具结果、计划态、记忆和压缩状态都可能已变化。
                 List<Message> messages = assembler.assemble(session);
-                assistantMessage = modelClient.call(messages, registry.all());
+                if (streamed) {
+                    // M9：流式——增量直接上屏；完整消息在流结束后才返回，再一次性写入会话。
+                    assistantMessage = modelClient.stream(messages, registry.all(), cancelToken, streamListener());
+                    renderer.streamEnd();
+                } else {
+                    assistantMessage = modelClient.call(messages, registry.all());
+                }
                 session.appendAssistant(assistantMessage);
+            } catch (ModelCancelledException e) {
+                // M9：请求中途被取消——半截内容只上过屏，不进历史；会话停在上一条完整消息。
+                renderer.streamEnd();
+                renderer.interrupted();
+                return new RunResult(RunResult.Status.CANCELLED, null, step, toolCalls, toolErrors);
             } catch (Exception e) {
+                if (streamed) {
+                    renderer.streamEnd();
+                }
                 renderer.error("调用模型失败：" + e.getMessage());
-                return;
+                return new RunResult(RunResult.Status.ERROR, "调用模型失败：" + e.getMessage(), step, toolCalls, toolErrors);
             }
             List<AssistantMessage.ToolCall> calls = assistantMessage.getToolCalls();
             if (calls == null) {
@@ -161,22 +184,28 @@ public class AgentLoop {
             //   都有对应的工具响应，取消后继续对话时请求体才完整。随后由检查点①停下。
             if (isCancelled() && calls.isEmpty()) {
                 renderer.interrupted();
-                return;
+                return new RunResult(RunResult.Status.CANCELLED, null, step, toolCalls, toolErrors);
             }
 
             // 2) 没有工具调用 → 这是最终答复，渲染后结束。
             if (calls.isEmpty()) {
-                renderReasoning(assistantMessage);
-                renderer.finalAnswer(assistantMessage.getText());
+                if (streamed) {
+                    renderer.info("");   // 流式下正文已上屏，只补一行空白与过程区隔开
+                } else {
+                    renderReasoning(assistantMessage);
+                    renderer.finalAnswer(assistantMessage.getText());
+                }
                 // M5：一轮收敛后补做一次提取兜底——但本轮若已主动写过记忆，则跳过（互斥，避免重复）。
                 maybeExtractMemories(session, turnStart, wroteMemoryThisTurn);
-                return;
+                return new RunResult(RunResult.Status.COMPLETED, assistantMessage.getText(), step, toolCalls, toolErrors);
             }
 
             // 思维链在正文和工具调用之前，调暗显示，避免和最终答复混在一起。
-            renderReasoning(assistantMessage);
-            // 若本轮既有文本又有工具调用，先把文本展示出来（模型常用来说明接下来要做什么）。
-            if (assistantMessage.getText() != null && !assistantMessage.getText().isBlank()) {
+            if (!streamed) {
+                renderReasoning(assistantMessage);
+            }
+            // 若本轮既有文本又有工具调用，先把文本展示出来（模型常用来说明接下来要做什么）。流式下已上屏。
+            if (!streamed && assistantMessage.getText() != null && !assistantMessage.getText().isBlank()) {
                 renderer.thought(assistantMessage.getText());
             }
 
@@ -187,6 +216,15 @@ public class AgentLoop {
             for (int k = 0; k < calls.size(); k++) {
                 AssistantMessage.ToolCall call = calls.get(k);
                 ToolResult result = results.get(k);
+                toolCalls++;
+                if ("Bash".equals(call.name())) {
+                    // M10：Bash 的文件改动无法追踪，记一笔，回退时提示“文件回退可能不完整”。
+                    session.checkpoints().noteBash(session.currentTurnId(),
+                            ToolCallHelper.getString(call, "command", ""));
+                }
+                if (result.error()) {
+                    toolErrors++;
+                }
                 renderer.toolUse(call);
                 renderer.toolResult(result);
                 // M6 第①层：工具结果写入内存历史/日志之前，先过一遍"结果预算"——
@@ -209,6 +247,26 @@ public class AgentLoop {
             }
             // 回到循环顶部，带着新观察再次请求模型（下一轮顶部的检查点①会捕获执行期间发生的取消）。
         }
+    }
+
+    /** M9：把流式增量接到终端渲染器。 */
+    private StreamListener streamListener() {
+        return new StreamListener() {
+            @Override
+            public void onReasoningDelta(String delta) {
+                renderer.streamReasoning(delta);
+            }
+
+            @Override
+            public void onTextDelta(String delta) {
+                renderer.streamText(delta);
+            }
+
+            @Override
+            public void onRetry(int attempt, long delayMs, String reason) {
+                renderer.retrying(attempt, delayMs, reason);
+            }
+        };
     }
 
     /** 把思考模式的思维链打到终端。没有则跳过。 */

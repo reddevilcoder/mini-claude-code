@@ -58,6 +58,9 @@ public class Session {
     private String sessionId;
     private SessionStore store = SessionStore.disabled();
     private TodoSnapshotStore todoStore = TodoSnapshotStore.disabled();
+    private String currentTurnId;                                   // M10：当前轮次（最近一条用户输入）
+    private com.minicc.checkpoint.CheckpointStore checkpoints =
+            com.minicc.checkpoint.CheckpointStore.disabled();       // M10：本会话的文件检查点
 
     public Session(Path workingDir) {
         this.workingDir = workingDir;
@@ -71,6 +74,13 @@ public class Session {
      * 让后续新消息继续追加到同一个 .jsonl。
      */
     public void attachPersistence(String sessionId, SessionStore store, TodoSnapshotStore todoStore) {
+        attachPersistence(sessionId, store, todoStore, com.minicc.checkpoint.CheckpointStore.disabled());
+    }
+
+    /** M10：连同本会话的检查点目录一起接入。 */
+    public void attachPersistence(String sessionId, SessionStore store, TodoSnapshotStore todoStore,
+                                  com.minicc.checkpoint.CheckpointStore checkpoints) {
+        this.checkpoints = checkpoints == null ? com.minicc.checkpoint.CheckpointStore.disabled() : checkpoints;
         this.sessionId = sessionId;
         this.store = store == null ? SessionStore.disabled() : store;
         this.todoStore = todoStore == null ? TodoSnapshotStore.disabled() : todoStore;
@@ -116,7 +126,10 @@ public class Session {
 
     /** 追加一条用户消息，并落盘同一条 {@link UserMessage}。 */
     public void appendUserMessage(String text) {
-        UserMessage message = new UserMessage(text);
+        // M10：每条用户输入开启新的一轮，带上轮次 ID（写入 JSONL，/rewind 据此定位，不依赖会被压缩改写的下标）。
+        currentTurnId = java.util.UUID.randomUUID().toString().substring(0, 8);
+        UserMessage message = UserMessage.builder().text(text)
+                .metadata(java.util.Map.of(SessionStore.TURN_ID, currentTurnId)).build();
         history.add(message);
         store.append(message);
     }
@@ -184,6 +197,9 @@ public class Session {
      */
     public void replay(Message message) {
         history.add(message);
+        if (message instanceof UserMessage u && u.getMetadata().get(SessionStore.TURN_ID) instanceof String id) {
+            currentTurnId = id;   // M10：恢复后续写同一会话，轮次接着走
+        }
     }
 
     /**
@@ -216,8 +232,75 @@ public class Session {
      * <p>当前实现的边界：workspace 是 final 且这里没有清空其已读集合，因此复用同一个 Session 时，
      * 先前的“已读”标记仍会保留。不能据此声称 /clear 或 /resume 会强制所有文件重新 Read。
      */
+    /** M10：当前轮次 ID；还没有用户输入时为 null。 */
+    public String currentTurnId() {
+        return currentTurnId;
+    }
+
+    /** M10：本会话的文件检查点。 */
+    public com.minicc.checkpoint.CheckpointStore checkpoints() {
+        return checkpoints;
+    }
+
+    /** M10：会话日志（/rewind 从 JSONL 重新加载历史，不依赖内存里可能已被压缩的历史）。 */
+    public SessionStore store() {
+        return store;
+    }
+
+    /**
+     * M10：把会话回退到 {@code turnId} 那一轮开始之前。
+     *
+     * <p>从 JSONL（而不是内存历史）重新加载：内存历史可能已被 M6 压缩改写，下标与原始记录不再对应；
+     * JSONL 永远是全量原文。追加一条 REWIND 事件后重放，得到的就是回退后的完整历史。
+     * 未接入持久化（测试）时退化为在内存历史里截断。
+     *
+     * @return 被撤回的那条用户输入原文（便于用户修改后重新发送）；找不到该轮返回 null
+     */
+    public String rewindConversation(String turnId) {
+        List<Message> source = store.logFile() != null ? new ArrayList<>(store.readAll()) : new ArrayList<>(history);
+        String prompt = null;
+        for (Message m : source) {
+            if (m instanceof UserMessage u && turnId.equals(u.getMetadata().get(SessionStore.TURN_ID))) {
+                prompt = u.getText();
+                break;
+            }
+        }
+        if (prompt == null) {
+            return null;
+        }
+        SessionStore.truncateBeforeTurn(source, turnId);
+        store.appendRewind(turnId);
+        history.clear();
+        history.addAll(source);
+        currentTurnId = null;
+        for (Message m : source) {
+            if (m instanceof UserMessage u && u.getMetadata().get(SessionStore.TURN_ID) instanceof String id) {
+                currentTurnId = id;
+            }
+        }
+        return prompt;
+    }
+
+    /** M10：一轮的摘要（供 /rewind 列表）。 */
+    public record Turn(String turnId, String prompt) {
+    }
+
+    /** M10：本会话全部轮次（按先后）。读 JSONL：内存历史可能已被压缩，丢了早期的用户消息。 */
+    public List<Turn> turns() {
+        List<Message> source = store.logFile() != null ? store.readAll() : history;
+        List<Turn> out = new ArrayList<>();
+        for (Message m : source) {
+            if (m instanceof UserMessage u && u.getMetadata().get(SessionStore.TURN_ID) instanceof String id) {
+                out.add(new Turn(id, u.getText()));
+            }
+        }
+        return out;
+    }
+
     public void clear() {
         history.clear();
+        workspace.clear();   // M10：/clear 后“已读”标记也作废，新会话里的模型没读过任何文件
+        currentTurnId = null;
         todos.clear();
         permissions = new PermissionState();
         planMode = new PlanModeState();   // M8：计划态随新会话复位为关闭
